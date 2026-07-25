@@ -1,8 +1,11 @@
-use std::{path::PathBuf, sync::Arc, thread, time::Duration};
+use std::{collections::HashMap, io::Cursor, path::PathBuf, sync::Arc, thread, time::Duration};
 
-use bridgescope_adb::{AdbLocator, AdbTransport, ProcessAdbTransport};
+use bridgescope_adb::{AdbLocator, AdbTransport, ProcessAdbTransport, ShellSessionHandle};
 use bridgescope_device::DeviceRegistry;
-use bridgescope_domain::{BackendCommand, BackendEvent, BridgeError, ErrorCode};
+use bridgescope_domain::{
+    BackendCommand, BackendEvent, BridgeError, DeviceTarget, ErrorCode, RawScreenshotPng,
+    ScreenshotData, ScreenshotFormat, ScreenshotImage, ShellSessionId,
+};
 use bridgescope_test_support::FakeAdbTransport;
 use eframe::egui;
 use tokio::{runtime::Builder, sync::mpsc, time::MissedTickBehavior};
@@ -10,10 +13,18 @@ use tracing::{info, warn};
 
 const CHANNEL_CAPACITY: usize = 64;
 const REFRESH_INTERVAL: Duration = Duration::from_secs(3);
+const MAX_SCREENSHOT_DIMENSION: u32 = 8192;
+const MAX_SCREENSHOT_PIXELS: u64 = 16_777_216;
+
+struct ActiveShell {
+    input: mpsc::Sender<Vec<u8>>,
+    handle: ShellSessionHandle,
+}
 
 pub struct RuntimeBridge {
     command_tx: mpsc::Sender<BackendCommand>,
     event_rx: mpsc::Receiver<BackendEvent>,
+    context: egui::Context,
 }
 
 impl RuntimeBridge {
@@ -21,6 +32,7 @@ impl RuntimeBridge {
         let (command_tx, command_rx) = mpsc::channel(CHANNEL_CAPACITY);
         let (event_tx, event_rx) = mpsc::channel(CHANNEL_CAPACITY);
 
+        let backend_context = context.clone();
         thread::Builder::new()
             .name("bridgescope-backend".to_owned())
             .spawn(move || {
@@ -29,13 +41,14 @@ impl RuntimeBridge {
                     .enable_all()
                     .build()
                     .expect("Tokio runtime must initialize");
-                runtime.block_on(run_backend(command_rx, event_tx, context));
+                runtime.block_on(run_backend(command_rx, event_tx, backend_context));
             })
             .expect("backend thread must start");
 
         Self {
             command_tx,
             event_rx,
+            context,
         }
     }
 
@@ -47,6 +60,10 @@ impl RuntimeBridge {
                 error.to_string(),
             )
         })
+    }
+
+    pub fn context(&self) -> egui::Context {
+        self.context.clone()
     }
 
     pub fn drain(&mut self) -> Vec<BackendEvent> {
@@ -65,6 +82,7 @@ async fn run_backend(
 ) {
     let transport = initialize_transport(&events, &context).await;
     let mut registry = DeviceRegistry::default();
+    let mut shells = HashMap::<ShellSessionId, ActiveShell>::new();
     let mut interval = tokio::time::interval(REFRESH_INTERVAL);
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
@@ -91,10 +109,246 @@ async fn run_backend(
                     BackendCommand::LoadOverview(serial) => {
                         load_overview(transport.as_ref(), &registry, serial, &events, &context).await;
                     }
+                    BackendCommand::OpenShell { target, session_id, size: _ } => {
+                        open_shell(
+                            transport.clone(),
+                            &registry,
+                            &mut shells,
+                            target,
+                            session_id,
+                            events.clone(),
+                            context.clone(),
+                        ).await;
+                    }
+                    BackendCommand::WriteShell { session_id, input } => {
+                        if let Some(shell) = shells.get(&session_id)
+                            && shell.input.try_send(input.into_bytes()).is_err()
+                        {
+                            send_event(&events, &context, BackendEvent::ShellFailed {
+                                session_id,
+                                error: BridgeError::new(
+                                    ErrorCode::OutputLimit,
+                                    "shell.input_queue_full",
+                                    "shell input queue is full",
+                                ),
+                            }).await;
+                        }
+                    }
+                    BackendCommand::ResizeShell { session_id: _, size: _ } => {
+                        // Native shell-v2 resize is a later transport milestone.
+                    }
+                    BackendCommand::CloseShell(session_id) => {
+                        if let Some(shell) = shells.remove(&session_id) {
+                            tokio::spawn(async move { let _result = shell.handle.close().await; });
+                        }
+                    }
+                    BackendCommand::CaptureScreenshot { request_id, target, format } => {
+                        capture_screenshot(
+                            transport.clone(),
+                            &registry,
+                            request_id,
+                            target,
+                            format,
+                            events.clone(),
+                            context.clone(),
+                        ).await;
+                    }
                 }
             }
         }
     }
+}
+
+async fn open_shell(
+    transport: Arc<dyn AdbTransport>,
+    registry: &DeviceRegistry,
+    shells: &mut HashMap<ShellSessionId, ActiveShell>,
+    target: DeviceTarget,
+    session_id: ShellSessionId,
+    events: mpsc::Sender<BackendEvent>,
+    context: egui::Context,
+) {
+    if registry.current_online(&target).is_none() {
+        send_event(
+            &events,
+            &context,
+            BackendEvent::ShellFailed {
+                session_id,
+                error: BridgeError::new(
+                    ErrorCode::DeviceUnavailable,
+                    "device.target_stale",
+                    target.serial.redacted(),
+                ),
+            },
+        )
+        .await;
+        return;
+    }
+    match transport.start_shell(&target.serial).await {
+        Ok(mut handle) => {
+            let input = handle.input();
+            let mut output = std::mem::replace(handle.output_mut(), mpsc::channel(1).1);
+            let output_events = events.clone();
+            let output_context = context.clone();
+            tokio::spawn(async move {
+                while let Some(chunk) = output.recv().await {
+                    send_event(
+                        &output_events,
+                        &output_context,
+                        BackendEvent::ShellOutput {
+                            session_id,
+                            bytes: chunk.bytes,
+                        },
+                    )
+                    .await;
+                }
+                send_event(
+                    &output_events,
+                    &output_context,
+                    BackendEvent::ShellClosed {
+                        session_id,
+                        exit_code: None,
+                    },
+                )
+                .await;
+            });
+            shells.insert(session_id, ActiveShell { input, handle });
+            send_event(
+                &events,
+                &context,
+                BackendEvent::ShellOpened { target, session_id },
+            )
+            .await;
+        }
+        Err(error) => {
+            send_event(
+                &events,
+                &context,
+                BackendEvent::ShellFailed { session_id, error },
+            )
+            .await;
+        }
+    }
+}
+
+async fn capture_screenshot(
+    transport: Arc<dyn AdbTransport>,
+    registry: &DeviceRegistry,
+    request_id: bridgescope_domain::OperationId,
+    target: DeviceTarget,
+    format: ScreenshotFormat,
+    events: mpsc::Sender<BackendEvent>,
+    context: egui::Context,
+) {
+    if registry.current_online(&target).is_none() {
+        send_event(
+            &events,
+            &context,
+            BackendEvent::ScreenshotFailed {
+                request_id,
+                target,
+                error: BridgeError::new(
+                    ErrorCode::DeviceUnavailable,
+                    "device.target_stale",
+                    "device is no longer online",
+                ),
+            },
+        )
+        .await;
+        return;
+    }
+    send_event(
+        &events,
+        &context,
+        BackendEvent::ScreenshotLoading {
+            request_id,
+            target: target.clone(),
+            format,
+        },
+    )
+    .await;
+    match transport.capture_screenshot(&target.serial).await {
+        Ok(png) => {
+            let raw_png = png.clone();
+            let decoded = tokio::task::spawn_blocking(move || decode_screenshot(&png)).await;
+            let data = match decoded {
+                Ok(Ok(image)) => Ok(ScreenshotData::DecodedWithPng {
+                    image,
+                    png: RawScreenshotPng::new(raw_png),
+                }),
+                Ok(Err(error)) => Err(error),
+                Err(error) => Err(BridgeError::new(
+                    ErrorCode::Internal,
+                    "screenshot.decode_task_failed",
+                    error.to_string(),
+                )),
+            };
+            match data {
+                Ok(data) => {
+                    send_event(
+                        &events,
+                        &context,
+                        BackendEvent::ScreenshotCaptured {
+                            request_id,
+                            target,
+                            data,
+                        },
+                    )
+                    .await;
+                }
+                Err(error) => {
+                    send_event(
+                        &events,
+                        &context,
+                        BackendEvent::ScreenshotFailed {
+                            request_id,
+                            target,
+                            error,
+                        },
+                    )
+                    .await;
+                }
+            }
+        }
+        Err(error) => {
+            send_event(
+                &events,
+                &context,
+                BackendEvent::ScreenshotFailed {
+                    request_id,
+                    target,
+                    error,
+                },
+            )
+            .await;
+        }
+    }
+}
+
+fn decode_screenshot(png: &[u8]) -> Result<ScreenshotImage, BridgeError> {
+    let image = image::ImageReader::with_format(Cursor::new(png), image::ImageFormat::Png)
+        .decode()
+        .map_err(|error| {
+            BridgeError::new(
+                ErrorCode::InvalidInput,
+                "screenshot.decode_failed",
+                error.to_string(),
+            )
+        })?;
+    let width = image.width();
+    let height = image.height();
+    let pixels = u64::from(width).saturating_mul(u64::from(height));
+    if width > MAX_SCREENSHOT_DIMENSION
+        || height > MAX_SCREENSHOT_DIMENSION
+        || pixels > MAX_SCREENSHOT_PIXELS
+    {
+        return Err(BridgeError::new(
+            ErrorCode::OutputLimit,
+            "screenshot.dimensions_too_large",
+            format!("{width}x{height}"),
+        ));
+    }
+    ScreenshotImage::new(width, height, image.to_rgba8().into_raw())
 }
 
 async fn initialize_transport(

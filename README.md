@@ -2,7 +2,7 @@
 
 BridgeScope is an independently implemented, pure-Rust desktop toolkit for inspecting and managing Android devices through ADB.
 
-> Status: **0.1 foundation under development.** The current milestone provides ADB discovery, explicit device selection, a device overview, a fake-device development backend, and the desktop navigation shell. Other panels are visible as roadmap placeholders and do not pretend to be implemented.
+> Status: **0.2 early development.** The current milestone provides ADB discovery, explicit device selection, a device overview, an interactive Android shell, binary-safe screenshots, and a fake-device development backend. Other panels remain roadmap placeholders.
 
 ## Goals
 
@@ -46,9 +46,14 @@ cargo test --workspace
 cargo build --workspace --release
 ```
 
+## Implemented workflows
+
+- **Interactive Shell:** starts `adb -s SERIAL shell -tt`, streams keyboard input and ANSI output, and supports explicit close/reconnect. This initial adapter uses a fixed 80×24 remote PTY; remote stderr is usually merged and true remote resize awaits native ADB shell-v2.
+- **Screenshot:** captures with binary-safe `adb -s SERIAL exec-out screencap -p`, validates/decodes PNG off the UI thread, displays Fit/100% modes, copies the decoded image, and saves the original PNG.
+
 ## Safety
 
-BridgeScope binds every structured operation to an explicit device serial. Destructive capabilities will require backend-enforced confirmation. The interactive shell is an expert feature and cannot make arbitrary commands safe.
+BridgeScope binds every structured operation to an explicit device serial and connection generation. Destructive capabilities will require backend-enforced confirmation. The interactive shell is an unrestricted expert feature; arbitrary Android shell commands cannot be made safe.
 
 ## Independence
 

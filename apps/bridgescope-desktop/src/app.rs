@@ -5,7 +5,7 @@ use eframe::egui::{self, Color32, RichText};
 
 use crate::{
     i18n::{Language, text},
-    panels::overview,
+    panels::{overview, screenshot, shell},
     runtime::RuntimeBridge,
     theme,
 };
@@ -65,6 +65,8 @@ pub struct BridgeScopeApp {
     snapshot: DeviceSnapshot,
     overview: Option<DeviceOverview>,
     loading_overview: bool,
+    shell: shell::ShellPanelState,
+    screenshot: screenshot::ScreenshotPanelState,
     active_panel: Panel,
     language: Language,
     dark_mode: bool,
@@ -83,6 +85,8 @@ impl BridgeScopeApp {
             snapshot: DeviceSnapshot::default(),
             overview: None,
             loading_overview: false,
+            shell: shell::ShellPanelState::default(),
+            screenshot: screenshot::ScreenshotPanelState::default(),
             active_panel: Panel::Overview,
             language: Language::English,
             dark_mode: true,
@@ -95,6 +99,9 @@ impl BridgeScopeApp {
 
     fn process_events(&mut self) {
         for event in self.runtime.drain() {
+            self.shell.handle_event(&event);
+            self.screenshot
+                .handle_event(&self.runtime.context(), &event);
             match event {
                 BackendEvent::AdbReady { path, version } => {
                     self.adb_path = Some(path);
@@ -122,6 +129,13 @@ impl BridgeScopeApp {
                     self.loading_overview = false;
                     self.last_error = Some(error);
                 }
+                BackendEvent::ShellOpened { .. }
+                | BackendEvent::ShellOutput { .. }
+                | BackendEvent::ShellClosed { .. }
+                | BackendEvent::ShellFailed { .. }
+                | BackendEvent::ScreenshotLoading { .. }
+                | BackendEvent::ScreenshotCaptured { .. }
+                | BackendEvent::ScreenshotFailed { .. } => {}
             }
         }
     }
@@ -258,22 +272,33 @@ impl BridgeScopeApp {
                 ui.add_space(10.0);
             }
 
-            if self.active_panel == Panel::Overview {
-                overview::show(
-                    ui,
-                    self.language,
-                    self.selected_record(),
-                    self.overview.as_ref(),
-                    self.loading_overview,
-                );
-            } else {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(100.0);
-                    ui.heading(text(self.language, self.active_panel.key()));
-                    ui.add_space(8.0);
-                    ui.label(text(self.language, "coming_soon"));
-                    ui.small("A panel is enabled only after its backend, UI states, tests, and real-device acceptance pass.");
-                });
+            let selected = self.selected_record().cloned();
+            let commands = match self.active_panel {
+                Panel::Overview => {
+                    overview::show(
+                        ui,
+                        self.language,
+                        selected.as_ref(),
+                        self.overview.as_ref(),
+                        self.loading_overview,
+                    );
+                    Vec::new()
+                }
+                Panel::Shell => shell::show(ui, selected.as_ref(), &mut self.shell),
+                Panel::Screenshot => screenshot::show(ui, selected.as_ref(), &mut self.screenshot),
+                _ => {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(100.0);
+                        ui.heading(text(self.language, self.active_panel.key()));
+                        ui.add_space(8.0);
+                        ui.label(text(self.language, "coming_soon"));
+                        ui.small("A panel is enabled only after its backend, UI states, tests, and real-device acceptance pass.");
+                    });
+                    Vec::new()
+                }
+            };
+            for command in commands {
+                self.send(command);
             }
         });
     }

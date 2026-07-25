@@ -383,6 +383,10 @@ impl RawScreenshotPng {
 pub enum ScreenshotData {
     DecodedRgba8(ScreenshotImage),
     RawPng(RawScreenshotPng),
+    DecodedWithPng {
+        image: ScreenshotImage,
+        png: RawScreenshotPng,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

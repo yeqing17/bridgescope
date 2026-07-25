@@ -228,6 +228,7 @@ dependencies = [
  "async-trait",
  "bridgescope-adb",
  "bridgescope-domain",
+ "image",
  "tokio",
  "tokio-util",
 ]

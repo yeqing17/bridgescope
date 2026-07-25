@@ -1,4 +1,4 @@
-use std::{ffi::OsString, path::PathBuf, process::Stdio, time::Duration};
+use std::{ffi::OsString, future::Future, path::PathBuf, process::Stdio, time::Duration};
 
 use bridgescope_domain::{BridgeError, DeviceSerial, ErrorCode};
 use tokio::{
@@ -30,10 +30,39 @@ pub struct ShellSessionHandle {
     input: mpsc::Sender<Vec<u8>>,
     output: mpsc::Receiver<ShellOutputChunk>,
     cancellation: CancellationToken,
-    completion: JoinHandle<Result<Option<i32>, BridgeError>>,
+    completion: Option<JoinHandle<Result<Option<i32>, BridgeError>>>,
 }
 
 impl ShellSessionHandle {
+    /// Creates a channel-backed shell session.
+    ///
+    /// This allows transport implementations that do not own a child process to
+    /// expose the same interactive shell interface. The handler receives input,
+    /// sends output chunks, and is cancelled when [`Self::close`] is called.
+    pub fn from_handler<F, Fut>(handler: F) -> Self
+    where
+        F: FnOnce(
+                mpsc::Receiver<Vec<u8>>,
+                mpsc::Sender<ShellOutputChunk>,
+                CancellationToken,
+            ) -> Fut
+            + Send
+            + 'static,
+        Fut: Future<Output = Result<Option<i32>, BridgeError>> + Send + 'static,
+    {
+        let (input, input_rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let (output_tx, output) = mpsc::channel(CHANNEL_CAPACITY);
+        let cancellation = CancellationToken::new();
+        let handler_cancel = cancellation.clone();
+        let completion = tokio::spawn(handler(input_rx, output_tx, handler_cancel));
+        Self {
+            input,
+            output,
+            cancellation,
+            completion: Some(completion),
+        }
+    }
+
     pub fn input(&self) -> mpsc::Sender<Vec<u8>> {
         self.input.clone()
     }
@@ -42,15 +71,31 @@ impl ShellSessionHandle {
         &mut self.output
     }
 
-    pub async fn close(self) -> Result<Option<i32>, BridgeError> {
+    pub async fn close(mut self) -> Result<Option<i32>, BridgeError> {
         self.cancellation.cancel();
-        self.completion.await.map_err(|error| {
+        let completion = self.completion.take().ok_or_else(|| {
+            BridgeError::new(
+                ErrorCode::Internal,
+                "shell.already_closed",
+                "shell is already closed",
+            )
+        })?;
+        completion.await.map_err(|error| {
             BridgeError::new(
                 ErrorCode::Internal,
                 "runtime.task_failed",
                 error.to_string(),
             )
         })?
+    }
+}
+
+impl Drop for ShellSessionHandle {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
+        if let Some(completion) = self.completion.take() {
+            completion.abort();
+        }
     }
 }
 
@@ -85,29 +130,11 @@ pub(crate) fn start_shell(
     let stdin = child.stdin.take().ok_or_else(|| missing_pipe("stdin"))?;
     let stdout = child.stdout.take().ok_or_else(|| missing_pipe("stdout"))?;
     let stderr = child.stderr.take().ok_or_else(|| missing_pipe("stderr"))?;
-    let (input_tx, input_rx) = mpsc::channel(CHANNEL_CAPACITY);
-    let (output_tx, output_rx) = mpsc::channel(CHANNEL_CAPACITY);
-    let cancellation = CancellationToken::new();
-    let completion_cancel = cancellation.clone();
-    let completion = tokio::spawn(async move {
-        run_shell(
-            child,
-            stdin,
-            input_rx,
-            output_tx,
-            stdout,
-            stderr,
-            completion_cancel,
-        )
-        .await
-    });
-
-    Ok(ShellSessionHandle {
-        input: input_tx,
-        output: output_rx,
-        cancellation,
-        completion,
-    })
+    Ok(ShellSessionHandle::from_handler(
+        move |input, output, cancellation| async move {
+            run_shell(child, stdin, input, output, stdout, stderr, cancellation).await
+        },
+    ))
 }
 
 async fn run_shell<Out, Err>(
@@ -160,27 +187,26 @@ where
     }
 
     drop(stdin);
-    let status = match timeout(CLOSE_GRACE, child.wait()).await {
-        Ok(result) => result.map_err(|error| {
+    let status = if let Ok(result) = timeout(CLOSE_GRACE, child.wait()).await {
+        result.map_err(|error| {
             BridgeError::new(ErrorCode::AdbFailed, "shell.wait_failed", error.to_string())
-        })?,
-        Err(_) => {
-            child.start_kill().map_err(|error| {
-                BridgeError::new(ErrorCode::AdbFailed, "shell.kill_failed", error.to_string())
-            })?;
-            timeout(CLOSE_GRACE, child.wait())
-                .await
-                .map_err(|_| {
-                    BridgeError::new(
-                        ErrorCode::TimedOut,
-                        "shell.close_timed_out",
-                        "shell did not exit",
-                    )
-                })?
-                .map_err(|error| {
-                    BridgeError::new(ErrorCode::AdbFailed, "shell.wait_failed", error.to_string())
-                })?
-        }
+        })?
+    } else {
+        child.start_kill().map_err(|error| {
+            BridgeError::new(ErrorCode::AdbFailed, "shell.kill_failed", error.to_string())
+        })?;
+        timeout(CLOSE_GRACE, child.wait())
+            .await
+            .map_err(|_| {
+                BridgeError::new(
+                    ErrorCode::TimedOut,
+                    "shell.close_timed_out",
+                    "shell did not exit",
+                )
+            })?
+            .map_err(|error| {
+                BridgeError::new(ErrorCode::AdbFailed, "shell.wait_failed", error.to_string())
+            })?
     };
     cancellation.cancel();
     finish_reader(stdout_task).await?;

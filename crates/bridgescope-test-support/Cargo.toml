@@ -9,6 +9,7 @@ rust-version.workspace = true
 async-trait.workspace = true
 bridgescope-adb = { path = "../bridgescope-adb" }
 bridgescope-domain = { path = "../bridgescope-domain" }
+image.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 

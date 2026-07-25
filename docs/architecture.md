@@ -25,4 +25,4 @@ backend runtime (Tokio)
 
 ## 0.1 runtime
 
-The first version uses a controlled `adb` child process adapter. It polls `adb devices -l`, reconciles snapshots in `DeviceRegistry`, and retrieves overview fields through fixed read-only commands. Native ADB host, shell-v2, sync, forward, and reverse protocol implementations will replace subprocess-dependent paths incrementally.
+The current version uses controlled `adb` child process adapters. It polls `adb devices -l`, reconciles snapshots in `DeviceRegistry`, retrieves overview fields through fixed read-only commands, starts an interactive `adb shell -tt`, and captures screenshots through binary-safe `exec-out screencap -p`. Shell and screenshot requests carry device generation plus session/request IDs so stale output is rejected. Native ADB host, shell-v2 resize, sync, forward, and reverse protocols will replace subprocess-dependent paths incrementally.

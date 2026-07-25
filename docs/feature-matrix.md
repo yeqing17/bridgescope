@@ -8,8 +8,8 @@ Legend: ✅ implemented, 🚧 active milestone, ⏳ planned, 🧪 experimental.
 | Device tracking and explicit selection | 🚧 | ✅ |
 | Fake device backend | 🚧 | ✅ |
 | Device overview | 🚧 | ✅ |
-| Interactive Shell | ⏳ | ✅ |
-| Screenshot | ⏳ | ✅ |
+| Interactive Shell | ✅ subprocess PTY | ✅ native shell-v2 planned |
+| Screenshot | ✅ | ✅ |
 | Logcat | ⏳ | ✅ |
 | File management | ⏳ | ✅ |
 | Application management | ⏳ | ✅ |

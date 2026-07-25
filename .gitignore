@@ -2,6 +2,7 @@
 *.log
 .idea/
 .vscode/
+.claude/
 .DS_Store
 Thumbs.db
 /android/bridgescope-agent/target/

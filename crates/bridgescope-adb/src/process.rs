@@ -52,8 +52,8 @@ pub(crate) async fn run_bounded(
         let status = child.wait().await.map_err(|error| {
             BridgeError::new(ErrorCode::AdbFailed, "adb.wait_failed", error.to_string())
         })?;
-        let stdout = stdout_task.await.map_err(join_error)??;
-        let stderr = stderr_task.await.map_err(join_error)??;
+        let stdout = stdout_task.await.map_err(|error| join_error(&error))??;
+        let stderr = stderr_task.await.map_err(|error| join_error(&error))??;
         Ok(ProcessOutput {
             stdout,
             stderr,
@@ -94,7 +94,7 @@ where
     }
 }
 
-fn join_error(error: tokio::task::JoinError) -> BridgeError {
+fn join_error(error: &tokio::task::JoinError) -> BridgeError {
     BridgeError::new(
         ErrorCode::Internal,
         "runtime.task_failed",
