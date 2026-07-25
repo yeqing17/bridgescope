@@ -10,6 +10,7 @@ Legend: ✅ implemented, 🚧 active milestone, ⏳ planned, 🧪 experimental.
 | Device overview | 🚧 | ✅ |
 | Interactive Shell | ✅ subprocess PTY | ✅ native shell-v2 planned |
 | Screenshot | ✅ | ✅ |
+| AI assistant (provider-neutral) | 🚧 reserved surface | ✅ streaming + real provider |
 | Logcat | ⏳ | ✅ |
 | File management | ⏳ | ✅ |
 | Application management | ⏳ | ✅ |

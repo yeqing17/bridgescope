@@ -5,7 +5,7 @@ use eframe::egui::{self, Color32, RichText};
 
 use crate::{
     i18n::{Language, text},
-    panels::{overview, screenshot, shell},
+    panels::{assistant, overview, screenshot, shell},
     runtime::RuntimeBridge,
     theme,
 };
@@ -22,10 +22,11 @@ enum Panel {
     Screenshot,
     Logcat,
     WebView,
+    Assistant,
 }
 
 impl Panel {
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 11] = [
         Self::Overview,
         Self::Files,
         Self::Applications,
@@ -36,6 +37,7 @@ impl Panel {
         Self::Screenshot,
         Self::Logcat,
         Self::WebView,
+        Self::Assistant,
     ];
 
     const fn key(self) -> &'static str {
@@ -50,6 +52,7 @@ impl Panel {
             Self::Screenshot => "screenshot",
             Self::Logcat => "logcat",
             Self::WebView => "webview",
+            Self::Assistant => "assistant",
         }
     }
 }
@@ -67,6 +70,7 @@ pub struct BridgeScopeApp {
     loading_overview: bool,
     shell: shell::ShellPanelState,
     screenshot: screenshot::ScreenshotPanelState,
+    assistant: assistant::AssistantPanelState,
     active_panel: Panel,
     language: Language,
     dark_mode: bool,
@@ -87,6 +91,7 @@ impl BridgeScopeApp {
             loading_overview: false,
             shell: shell::ShellPanelState::default(),
             screenshot: screenshot::ScreenshotPanelState::default(),
+            assistant: assistant::AssistantPanelState::default(),
             active_panel: Panel::Overview,
             language: Language::English,
             dark_mode: true,
@@ -102,6 +107,7 @@ impl BridgeScopeApp {
             self.shell.handle_event(&event);
             self.screenshot
                 .handle_event(&self.runtime.context(), &event);
+            self.assistant.handle_event(&event);
             match event {
                 BackendEvent::AdbReady { path, version } => {
                     self.adb_path = Some(path);
@@ -135,7 +141,11 @@ impl BridgeScopeApp {
                 | BackendEvent::ShellFailed { .. }
                 | BackendEvent::ScreenshotLoading { .. }
                 | BackendEvent::ScreenshotCaptured { .. }
-                | BackendEvent::ScreenshotFailed { .. } => {}
+                | BackendEvent::ScreenshotFailed { .. }
+                | BackendEvent::AiReady { .. }
+                | BackendEvent::AiUnavailable { .. }
+                | BackendEvent::AiChatCompleted { .. }
+                | BackendEvent::AiChatFailed { .. } => {}
             }
         }
     }
@@ -286,6 +296,7 @@ impl BridgeScopeApp {
                 }
                 Panel::Shell => shell::show(ui, selected.as_ref(), &mut self.shell),
                 Panel::Screenshot => screenshot::show(ui, selected.as_ref(), &mut self.screenshot),
+                Panel::Assistant => assistant::show(ui, &mut self.assistant),
                 _ => {
                     ui.vertical_centered(|ui| {
                         ui.add_space(100.0);
@@ -383,9 +394,10 @@ mod tests {
 
     #[test]
     fn all_expected_panels_are_present() {
-        assert_eq!(Panel::ALL.len(), 10);
+        assert_eq!(Panel::ALL.len(), 11);
         assert_eq!(Panel::ALL[0], Panel::Overview);
         assert_eq!(Panel::ALL[9], Panel::WebView);
+        assert_eq!(Panel::ALL[10], Panel::Assistant);
     }
 
     #[test]

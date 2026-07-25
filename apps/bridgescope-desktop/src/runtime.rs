@@ -81,6 +81,7 @@ async fn run_backend(
     context: egui::Context,
 ) {
     let transport = initialize_transport(&events, &context).await;
+    let ai_provider = initialize_ai(&events, &context).await;
     let mut registry = DeviceRegistry::default();
     let mut shells = HashMap::<ShellSessionId, ActiveShell>::new();
     let mut interval = tokio::time::interval(REFRESH_INTERVAL);
@@ -149,6 +150,15 @@ async fn run_backend(
                             request_id,
                             target,
                             format,
+                            events.clone(),
+                            context.clone(),
+                        ).await;
+                    }
+                    BackendCommand::SendAiChat { request_id, prompt } => {
+                        run_ai_chat(
+                            ai_provider.clone(),
+                            request_id,
+                            prompt,
                             events.clone(),
                             context.clone(),
                         ).await;
@@ -404,6 +414,112 @@ async fn initialize_transport(
         }
     }
 }
+
+/// Resolve the AI provider for this session.
+///
+/// A real provider is constructed from settings once configuration support
+/// lands. Today the runtime advertises a placeholder [`FakeAiProvider`] only in
+/// fake mode, and otherwise reports `AiUnavailable` so the UI shows an explicit
+/// "not configured" state rather than silently calling a default endpoint.
+async fn initialize_ai(
+    events: &mpsc::Sender<BackendEvent>,
+    context: &egui::Context,
+) -> Option<Arc<dyn bridgescope_ai::AiProvider>> {
+    if fake_backend_enabled() {
+        let provider: Arc<dyn bridgescope_ai::AiProvider> =
+            Arc::new(bridgescope_ai::FakeAiProvider::new());
+        send_event(
+            events,
+            context,
+            BackendEvent::AiReady {
+                kind: provider.kind().to_owned(),
+                model: provider.model().to_owned(),
+            },
+        )
+        .await;
+        return Some(provider);
+    }
+
+    send_event(
+        events,
+        context,
+        BackendEvent::AiUnavailable {
+            reason: "no provider configured".to_owned(),
+        },
+    )
+    .await;
+    None
+}
+
+async fn run_ai_chat(
+    provider: Option<Arc<dyn bridgescope_ai::AiProvider>>,
+    request_id: bridgescope_domain::OperationId,
+    prompt: String,
+    events: mpsc::Sender<BackendEvent>,
+    context: egui::Context,
+) {
+    let Some(provider) = provider else {
+        send_event(
+            &events,
+            &context,
+            BackendEvent::AiChatFailed {
+                request_id,
+                error: BridgeError::new(
+                    ErrorCode::Internal,
+                    "ai.not_configured",
+                    "no AI provider is configured",
+                ),
+            },
+        )
+        .await;
+        return;
+    };
+
+    let request = bridgescope_ai::ChatRequest::new(vec![
+        bridgescope_ai::ChatMessage::new(
+            bridgescope_ai::ChatRole::System,
+            BRIDGESCOPE_SYSTEM_PROMPT,
+        ),
+        bridgescope_ai::ChatMessage::user(prompt),
+    ])
+    .authorized_by(
+        bridgescope_ai::ContextAuthorization::none()
+            .grant(bridgescope_ai::ContextGrant::SystemPrompt),
+    );
+
+    let result = provider.complete(&request).await;
+    match result {
+        Ok(response) => {
+            send_event(
+                &events,
+                &context,
+                BackendEvent::AiChatCompleted {
+                    request_id,
+                    reply: response.message.content,
+                },
+            )
+            .await;
+        }
+        Err(error) => {
+            send_event(
+                &events,
+                &context,
+                BackendEvent::AiChatFailed {
+                    request_id,
+                    error: BridgeError::new(
+                        ErrorCode::Internal,
+                        "ai.request_failed",
+                        error.to_string(),
+                    ),
+                },
+            )
+            .await;
+        }
+    }
+}
+
+const BRIDGESCOPE_SYSTEM_PROMPT: &str = "You are BridgeScope's assistant. BridgeScope is a pure-Rust Android debugging tool. \
+Keep replies concise and focused on Android debugging, ADB, and the device the user is testing.";
 
 async fn refresh_devices(
     transport: &dyn AdbTransport,

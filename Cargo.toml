@@ -7,7 +7,7 @@ members = [
     "crates/bridgescope-device",
     "crates/bridgescope-application",
     "crates/bridgescope-scrcpy",
-    "crates/bridgescope-test-support",
+    "crates/bridgescope-test-support", "crates/bridgescope-ai",
 ]
 
 [workspace.package]
@@ -40,3 +40,6 @@ module_name_repetitions = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 must_use_candidate = "allow"
+# "BridgeScope" is the project's proper noun and appears throughout doc
+# comments; backticking every occurrence adds noise without value.
+doc_markdown = "allow"

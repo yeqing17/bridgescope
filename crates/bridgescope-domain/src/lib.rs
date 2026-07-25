@@ -448,6 +448,13 @@ pub enum BackendCommand {
         target: DeviceTarget,
         format: ScreenshotFormat,
     },
+    /// Ask the configured AI provider for a completion. Reserved surface: the
+    /// runtime resolves the provider independently; this command carries only
+    /// the transcript the UI has assembled.
+    SendAiChat {
+        request_id: OperationId,
+        prompt: String,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -490,6 +497,24 @@ pub enum BackendEvent {
     ScreenshotFailed {
         request_id: OperationId,
         target: DeviceTarget,
+        error: BridgeError,
+    },
+    /// The AI provider became available (or a placeholder is active in dev).
+    AiReady {
+        kind: String,
+        model: String,
+    },
+    /// No AI provider is configured; the panel should show a setup prompt.
+    AiUnavailable {
+        reason: String,
+    },
+    /// A single completion finished. Failures arrive as [`AiChatFailed`].
+    AiChatCompleted {
+        request_id: OperationId,
+        reply: String,
+    },
+    AiChatFailed {
+        request_id: OperationId,
         error: BridgeError,
     },
 }

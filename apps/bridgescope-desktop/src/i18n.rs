@@ -53,6 +53,8 @@ pub fn text(language: Language, key: &str) -> &'static str {
         (_, "screenshot") => "Screenshot",
         (_, "logcat") => "Logcat",
         (_, "webview") => "WebView",
+        (Language::Chinese, "assistant") => "AI 助手",
+        (_, "assistant") => "AI Assistant",
         (_, "select_device") => "Select a device",
         (_, "no_device") => "No connected devices",
         (_, "refresh") => "Refresh",

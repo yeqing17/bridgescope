@@ -1,0 +1,18 @@
+[package]
+name = "bridgescope-ai"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+bridgescope-domain = { path = "../bridgescope-domain" }
+serde.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true }
+tracing.workspace = true
+
+[lints]
+workspace = true

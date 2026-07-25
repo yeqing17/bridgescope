@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 bridgescope-adb = { path = "../../crates/bridgescope-adb" }
+bridgescope-ai = { path = "../../crates/bridgescope-ai" }
 bridgescope-device = { path = "../../crates/bridgescope-device" }
 bridgescope-domain = { path = "../../crates/bridgescope-domain" }
 bridgescope-test-support = { path = "../../crates/bridgescope-test-support" }

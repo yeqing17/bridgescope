@@ -2,7 +2,7 @@
 
 BridgeScope is an independently implemented, pure-Rust desktop toolkit for inspecting and managing Android devices through ADB.
 
-> Status: **0.2 early development.** The current milestone provides ADB discovery, explicit device selection, a device overview, an interactive Android shell, binary-safe screenshots, and a fake-device development backend. Other panels remain roadmap placeholders.
+> Status: **0.2 early development.** The current milestone provides ADB discovery, explicit device selection, a device overview, an interactive Android shell, binary-safe screenshots, a provider-neutral AI assistant surface, and a fake-device development backend. Other panels remain roadmap placeholders.
 
 ## Goals
 
