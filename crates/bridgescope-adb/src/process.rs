@@ -1,0 +1,139 @@
+use std::{ffi::OsString, path::Path, process::Stdio, time::Duration};
+
+use bridgescope_domain::{BridgeError, ErrorCode};
+use tokio::{
+    io::{AsyncRead, AsyncReadExt},
+    process::Command,
+    time::timeout,
+};
+
+pub(crate) struct ProcessOutput {
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    pub exit_code: Option<i32>,
+}
+
+pub(crate) async fn run_bounded(
+    executable: &Path,
+    arguments: Vec<OsString>,
+    command_timeout: Duration,
+    stdout_limit: usize,
+    stderr_limit: usize,
+) -> Result<ProcessOutput, BridgeError> {
+    let mut child = Command::new(executable)
+        .args(arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|error| {
+            BridgeError::new(ErrorCode::AdbFailed, "adb.spawn_failed", error.to_string())
+        })?;
+
+    let stdout = child.stdout.take().ok_or_else(|| {
+        BridgeError::new(
+            ErrorCode::Internal,
+            "adb.stdout_missing",
+            "stdout pipe missing",
+        )
+    })?;
+    let stderr = child.stderr.take().ok_or_else(|| {
+        BridgeError::new(
+            ErrorCode::Internal,
+            "adb.stderr_missing",
+            "stderr pipe missing",
+        )
+    })?;
+
+    let operation = async {
+        let stdout_task = tokio::spawn(read_limited(stdout, stdout_limit));
+        let stderr_task = tokio::spawn(read_limited(stderr, stderr_limit));
+        let status = child.wait().await.map_err(|error| {
+            BridgeError::new(ErrorCode::AdbFailed, "adb.wait_failed", error.to_string())
+        })?;
+        let stdout = stdout_task.await.map_err(join_error)??;
+        let stderr = stderr_task.await.map_err(join_error)??;
+        Ok(ProcessOutput {
+            stdout,
+            stderr,
+            exit_code: status.code(),
+        })
+    };
+
+    timeout(command_timeout, operation).await.map_err(|_| {
+        BridgeError::new(
+            ErrorCode::TimedOut,
+            "adb.timed_out",
+            "adb command timed out",
+        )
+    })?
+}
+
+async fn read_limited<R>(mut reader: R, limit: usize) -> Result<Vec<u8>, BridgeError>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut output = Vec::with_capacity(limit.min(64 * 1024));
+    let mut chunk = [0_u8; 8192];
+    loop {
+        let count = reader.read(&mut chunk).await.map_err(|error| {
+            BridgeError::new(ErrorCode::AdbFailed, "adb.read_failed", error.to_string())
+        })?;
+        if count == 0 {
+            return Ok(output);
+        }
+        if output.len().saturating_add(count) > limit {
+            return Err(BridgeError::new(
+                ErrorCode::OutputLimit,
+                "adb.output_limit",
+                "adb output exceeded the configured limit",
+            ));
+        }
+        output.extend_from_slice(&chunk[..count]);
+    }
+}
+
+fn join_error(error: tokio::task::JoinError) -> BridgeError {
+    BridgeError::new(
+        ErrorCode::Internal,
+        "runtime.task_failed",
+        error.to_string(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::io::AsyncWriteExt;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn bounded_reader_preserves_binary_bytes() {
+        let (mut writer, reader) = tokio::io::duplex(32);
+        let bytes = vec![0, 13, 10, 255, 0, 128];
+        let expected = bytes.clone();
+        tokio::spawn(async move {
+            writer.write_all(&bytes).await.expect("write fixture");
+        });
+        assert_eq!(
+            read_limited(reader, 32).await.expect("read fixture"),
+            expected
+        );
+    }
+
+    #[tokio::test]
+    async fn bounded_reader_rejects_limit_plus_one() {
+        let (mut writer, reader) = tokio::io::duplex(32);
+        tokio::spawn(async move {
+            writer
+                .write_all(&[1, 2, 3, 4])
+                .await
+                .expect("write fixture");
+        });
+        assert_eq!(
+            read_limited(reader, 3).await.expect_err("must reject").code,
+            ErrorCode::OutputLimit
+        );
+    }
+}

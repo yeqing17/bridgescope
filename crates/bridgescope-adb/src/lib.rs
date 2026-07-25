@@ -1,9 +1,12 @@
+mod process;
+mod screenshot;
+mod shell;
+
 use std::{
     collections::HashMap,
     env,
-    ffi::{OsStr, OsString},
+    ffi::OsString,
     path::{Path, PathBuf},
-    process::Stdio,
     time::Duration,
 };
 
@@ -12,7 +15,8 @@ use bridgescope_domain::{
     BridgeError, DeviceCapabilities, DeviceDescriptor, DeviceOverview, DeviceSerial, DeviceState,
     ErrorCode,
 };
-use tokio::{process::Command, time::timeout};
+
+pub use shell::{ShellOutputChunk, ShellSessionHandle, ShellStream};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
@@ -89,6 +93,8 @@ pub trait AdbTransport: Send + Sync {
     async fn version(&self) -> Result<String, BridgeError>;
     async fn list_devices(&self) -> Result<Vec<DeviceDescriptor>, BridgeError>;
     async fn device_overview(&self, serial: &DeviceSerial) -> Result<DeviceOverview, BridgeError>;
+    async fn start_shell(&self, serial: &DeviceSerial) -> Result<ShellSessionHandle, BridgeError>;
+    async fn capture_screenshot(&self, serial: &DeviceSerial) -> Result<Vec<u8>, BridgeError>;
 }
 
 #[derive(Clone, Debug)]
@@ -114,55 +120,29 @@ impl ProcessAdbTransport {
     async fn run<I, S>(&self, arguments: I) -> Result<String, BridgeError>
     where
         I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
+        S: Into<OsString>,
     {
-        let child = Command::new(&self.executable)
-            .args(arguments)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|error| {
-                BridgeError::new(ErrorCode::AdbFailed, "adb.spawn_failed", error.to_string())
-            })?;
-
-        let output = timeout(self.timeout, child.wait_with_output())
-            .await
-            .map_err(|_| {
-                BridgeError::new(
-                    ErrorCode::TimedOut,
-                    "adb.timed_out",
-                    "adb command timed out",
-                )
-            })?
-            .map_err(|error| {
-                BridgeError::new(ErrorCode::AdbFailed, "adb.wait_failed", error.to_string())
-            })?;
-
-        if output.stdout.len() > self.max_output_bytes
-            || output.stderr.len() > self.max_output_bytes
-        {
-            return Err(BridgeError::new(
-                ErrorCode::OutputLimit,
-                "adb.output_limit",
-                "adb output exceeded the configured limit",
-            ));
-        }
-
-        if !output.status.success() {
+        let arguments = arguments.into_iter().map(Into::into).collect();
+        let output = process::run_bounded(
+            &self.executable,
+            arguments,
+            self.timeout,
+            self.max_output_bytes,
+            self.max_output_bytes,
+        )
+        .await?;
+        if output.exit_code != Some(0) {
             let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
             return Err(BridgeError::new(
                 ErrorCode::AdbFailed,
                 "adb.command_failed",
                 if detail.is_empty() {
-                    format!("adb exited with {}", output.status)
+                    format!("adb exited with {:?}", output.exit_code)
                 } else {
                     detail
                 },
             ));
         }
-
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
 
@@ -260,6 +240,14 @@ impl AdbTransport for ProcessAdbTransport {
             storage_used_kib: storage.map(|(_, used)| used),
             capabilities: DeviceCapabilities::basic_online(),
         })
+    }
+
+    async fn start_shell(&self, serial: &DeviceSerial) -> Result<ShellSessionHandle, BridgeError> {
+        shell::start_shell(self.executable.clone(), serial)
+    }
+
+    async fn capture_screenshot(&self, serial: &DeviceSerial) -> Result<Vec<u8>, BridgeError> {
+        screenshot::capture_screenshot(&self.executable, serial).await
     }
 }
 
