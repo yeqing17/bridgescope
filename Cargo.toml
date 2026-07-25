@@ -1,0 +1,42 @@
+[workspace]
+resolver = "2"
+members = [
+    "apps/bridgescope-desktop",
+    "crates/bridgescope-domain",
+    "crates/bridgescope-adb",
+    "crates/bridgescope-device",
+    "crates/bridgescope-application",
+    "crates/bridgescope-scrcpy",
+    "crates/bridgescope-test-support",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.90"
+repository = "https://example.invalid/bridgescope"
+
+[workspace.dependencies]
+async-trait = "0.1.91"
+eframe = { version = "0.33.3", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+serde = { version = "1.0.228", features = ["derive"] }
+thiserror = "2.0.17"
+tokio = { version = "1.53.1", features = ["io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
+tokio-util = { version = "0.7.18", features = ["rt"] }
+tracing = "0.1.44"
+vt100 = "0.16.2"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
+uuid = { version = "1.24.0", features = ["v4", "serde"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"

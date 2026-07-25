@@ -1,0 +1,24 @@
+# Feature matrix
+
+Legend: ✅ implemented, 🚧 active milestone, ⏳ planned, 🧪 experimental.
+
+| Area | 0.1 | Target |
+|---|---:|---:|
+| ADB discovery and diagnostics | 🚧 | ✅ |
+| Device tracking and explicit selection | 🚧 | ✅ |
+| Fake device backend | 🚧 | ✅ |
+| Device overview | 🚧 | ✅ |
+| Interactive Shell | ⏳ | ✅ |
+| Screenshot | ⏳ | ✅ |
+| Logcat | ⏳ | ✅ |
+| File management | ⏳ | ✅ |
+| Application management | ⏳ | ✅ |
+| Process monitor | ⏳ | ✅ |
+| Performance metrics | ⏳ | ✅ |
+| scrcpy screen/audio/control | ⏳ | ✅ |
+| Layout inspector | ⏳ | ✅ |
+| Pure Rust Android helper | ⏳ | 🧪 |
+| WebView inspection | ⏳ | ✅ |
+| AVD manager | ⏳ | ✅ |
+
+A visible panel is not considered implemented until its backend, UI states, tests, and real-device acceptance flow pass.

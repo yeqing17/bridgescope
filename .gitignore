@@ -1,0 +1,7 @@
+/target/
+*.log
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+/android/bridgescope-agent/target/

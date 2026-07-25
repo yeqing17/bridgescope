@@ -1,0 +1,22 @@
+[package]
+name = "bridgescope-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bridgescope-adb = { path = "../../crates/bridgescope-adb" }
+bridgescope-device = { path = "../../crates/bridgescope-device" }
+bridgescope-domain = { path = "../../crates/bridgescope-domain" }
+bridgescope-test-support = { path = "../../crates/bridgescope-test-support" }
+eframe.workspace = true
+image.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+vt100.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true
