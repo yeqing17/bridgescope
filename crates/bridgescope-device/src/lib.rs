@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use bridgescope_adb::AdbTransport;
 use bridgescope_domain::{
     BridgeError, DeviceDescriptor, DeviceOverview, DeviceRecord, DeviceSerial, DeviceSnapshot,
-    ErrorCode,
+    DeviceTarget, ErrorCode,
 };
 
 #[derive(Debug, Default)]
@@ -32,7 +32,7 @@ impl DeviceRegistry {
         for descriptor in devices {
             let serial = descriptor.serial.clone();
             let generation = match self.records.get(&serial) {
-                Some(previous) if previous.descriptor.state == descriptor.state => {
+                Some(previous) if same_transport(&previous.descriptor, &descriptor) => {
                     previous.generation
                 }
                 Some(previous) => previous.generation.saturating_add(1),
@@ -91,9 +91,29 @@ impl DeviceRegistry {
             .and_then(|serial| self.records.get(serial))
     }
 
+    /// Returns a target only while the selected device is currently online.
+    #[must_use]
+    pub fn current_online_target(&self) -> Option<DeviceTarget> {
+        self.selected_record()
+            .filter(|record| record.descriptor.state.is_online())
+            .map(DeviceRecord::target)
+    }
+
+    /// Resolves a target only if its connection generation is still online.
+    #[must_use]
+    pub fn current_online(&self, target: &DeviceTarget) -> Option<&DeviceRecord> {
+        self.records.get(&target.serial).filter(|record| {
+            record.generation == target.generation && record.descriptor.state.is_online()
+        })
+    }
+
     pub fn generation(&self, serial: &DeviceSerial) -> Option<u64> {
         self.records.get(serial).map(|record| record.generation)
     }
+}
+
+fn same_transport(previous: &DeviceDescriptor, current: &DeviceDescriptor) -> bool {
+    previous.state == current.state && previous.transport_id == current.transport_id
 }
 
 pub async fn load_overview(
@@ -119,13 +139,21 @@ mod tests {
     use super::*;
 
     fn device(serial: &str, state: DeviceState) -> DeviceDescriptor {
+        device_with_transport(serial, state, None)
+    }
+
+    fn device_with_transport(
+        serial: &str,
+        state: DeviceState,
+        transport_id: Option<u64>,
+    ) -> DeviceDescriptor {
         DeviceDescriptor {
             serial: DeviceSerial::new(serial).expect("valid serial"),
             state,
             product: None,
             model: None,
             device: None,
-            transport_id: None,
+            transport_id,
         }
     }
 
@@ -137,6 +165,7 @@ mod tests {
             device("two", DeviceState::Online),
         ]);
         assert_eq!(snapshot.selected, None);
+        assert_eq!(registry.current_online_target(), None);
     }
 
     #[test]
@@ -148,6 +177,7 @@ mod tests {
             .expect("device exists");
         let snapshot = registry.reconcile(Vec::new());
         assert_eq!(snapshot.selected, None);
+        assert_eq!(registry.current_online_target(), None);
     }
 
     #[test]
@@ -162,6 +192,122 @@ mod tests {
         registry.reconcile(vec![device("one", DeviceState::Online)]);
         let third = registry.generation(&serial).expect("generation");
         assert!(first < second && second < third);
+    }
+
+    #[test]
+    fn generation_changes_when_transport_id_changes() {
+        let mut registry = DeviceRegistry::default();
+        let serial = DeviceSerial::new("one").expect("valid serial");
+        registry.reconcile(vec![device_with_transport(
+            "one",
+            DeviceState::Online,
+            Some(11),
+        )]);
+        let first = registry.generation(&serial).expect("generation");
+
+        registry.reconcile(vec![device_with_transport(
+            "one",
+            DeviceState::Online,
+            Some(12),
+        )]);
+        let second = registry.generation(&serial).expect("generation");
+
+        assert_eq!(second, first + 1);
+    }
+
+    #[test]
+    fn generation_is_stable_for_same_transport_and_metadata_changes() {
+        let mut registry = DeviceRegistry::default();
+        let serial = DeviceSerial::new("one").expect("valid serial");
+        let mut first = device_with_transport("one", DeviceState::Online, Some(11));
+        first.model = Some("old".to_owned());
+        registry.reconcile(vec![first]);
+        let generation = registry.generation(&serial).expect("generation");
+
+        let mut updated = device_with_transport("one", DeviceState::Online, Some(11));
+        updated.model = Some("new".to_owned());
+        registry.reconcile(vec![updated]);
+
+        assert_eq!(registry.generation(&serial), Some(generation));
+    }
+
+    #[test]
+    fn transport_id_presence_changes_generation_conservatively() {
+        let mut registry = DeviceRegistry::default();
+        let serial = DeviceSerial::new("one").expect("valid serial");
+        registry.reconcile(vec![device_with_transport(
+            "one",
+            DeviceState::Online,
+            Some(11),
+        )]);
+        let first = registry.generation(&serial).expect("generation");
+
+        registry.reconcile(vec![device_with_transport(
+            "one",
+            DeviceState::Online,
+            None,
+        )]);
+        let missing = registry.generation(&serial).expect("generation");
+
+        registry.reconcile(vec![device_with_transport(
+            "one",
+            DeviceState::Online,
+            Some(12),
+        )]);
+        let replacement = registry.generation(&serial).expect("generation");
+
+        assert!(first < missing && missing < replacement);
+    }
+
+    #[test]
+    fn selected_current_online_target_requires_online_state() {
+        let mut registry = DeviceRegistry::default();
+        let serial = DeviceSerial::new("one").expect("valid serial");
+        registry.reconcile(vec![device_with_transport(
+            "one",
+            DeviceState::Offline,
+            Some(1),
+        )]);
+        registry
+            .select(Some(serial.clone()))
+            .expect("device exists even while offline");
+        assert_eq!(registry.current_online_target(), None);
+
+        registry.reconcile(vec![device_with_transport(
+            "one",
+            DeviceState::Online,
+            Some(1),
+        )]);
+        let target = registry.current_online_target().expect("online target");
+        assert_eq!(target.serial, serial);
+        assert_eq!(
+            registry.current_online(&target).map(DeviceRecord::target),
+            Some(target)
+        );
+    }
+
+    #[test]
+    fn stale_target_does_not_resolve_after_reconnect() {
+        let mut registry = DeviceRegistry::default();
+        let serial = DeviceSerial::new("one").expect("valid serial");
+        registry.reconcile(vec![device_with_transport(
+            "one",
+            DeviceState::Online,
+            Some(1),
+        )]);
+        registry
+            .select(Some(serial))
+            .expect("device exists and can be selected");
+        let stale = registry.current_online_target().expect("online target");
+
+        registry.reconcile(vec![device_with_transport(
+            "one",
+            DeviceState::Online,
+            Some(2),
+        )]);
+
+        assert_eq!(registry.current_online(&stale), None);
+        assert_ne!(registry.current_online_target(), Some(stale));
     }
 
     #[test]
