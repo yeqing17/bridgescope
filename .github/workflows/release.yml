@@ -1,0 +1,157 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+      prerelease: ${{ steps.metadata.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.90.0
+        with:
+          components: rustfmt, clippy
+      - name: Validate release metadata
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release tag: $tag" >&2
+            exit 1
+          fi
+
+          version="${tag#v}"
+          package_version="$(cargo metadata --no-deps --locked --format-version 1 | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(package["version"] for package in data["packages"] if package["name"] == "bridgescope-desktop"))')"
+          if [[ "$version" != "$package_version" ]]; then
+            echo "Tag version $version does not match bridgescope-desktop $package_version" >&2
+            exit 1
+          fi
+
+          repository="$(cargo metadata --no-deps --locked --format-version 1 | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(package["repository"] for package in data["packages"] if package["name"] == "bridgescope-desktop"))')"
+          if [[ "$repository" != "https://github.com/yeqing17/bridgescope" ]]; then
+            echo "Unexpected Cargo repository: $repository" >&2
+            exit 1
+          fi
+
+          prerelease=false
+          if [[ "$version" == *-* ]]; then
+            prerelease=true
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+  build:
+    needs: validate
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.90.0
+        with:
+          targets: x86_64-pc-windows-msvc
+      - run: cargo test --workspace --locked
+      - run: cargo build --package bridgescope-desktop --release --locked --target x86_64-pc-windows-msvc
+      - name: Package Windows release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = "${{ github.ref_name }}"
+          $bundleName = "bridgescope-desktop-$tag-x86_64-pc-windows-msvc"
+          $binary = "target/x86_64-pc-windows-msvc/release/bridgescope-desktop.exe"
+          if (-not (Test-Path $binary -PathType Leaf) -or (Get-Item $binary).Length -eq 0) {
+            throw "Release executable is missing or empty: $binary"
+          }
+
+          New-Item -ItemType Directory -Force -Path "dist/$bundleName" | Out-Null
+          Copy-Item $binary "dist/$bundleName/bridgescope-desktop.exe"
+          Copy-Item README.md, LICENSE-MIT, LICENSE-APACHE, NOTICE "dist/$bundleName/"
+          Compress-Archive -Path "dist/$bundleName" -DestinationPath "dist/$bundleName.zip"
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::OpenRead("dist/$bundleName.zip")
+          try {
+            $expected = @(
+              "$bundleName/bridgescope-desktop.exe",
+              "$bundleName/README.md",
+              "$bundleName/LICENSE-MIT",
+              "$bundleName/LICENSE-APACHE",
+              "$bundleName/NOTICE"
+            ) | Sort-Object
+            $actual = $archive.Entries |
+              Where-Object { -not [string]::IsNullOrEmpty($_.Name) } |
+              ForEach-Object { $_.FullName.Replace('\', '/') } |
+              Sort-Object
+            if (Compare-Object $expected $actual) {
+              throw "Release archive contents do not match the expected files"
+            }
+          } finally {
+            $archive.Dispose()
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bridgescope-release-windows-x86_64
+          path: dist/*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: bridgescope-release-windows-x86_64
+          path: dist
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t archives < <(find dist -maxdepth 1 -type f -name '*.zip' -printf '%f\n' | sort)
+          if [[ "${#archives[@]}" -ne 1 ]]; then
+            echo "Expected exactly one Windows release archive" >&2
+            exit 1
+          fi
+          checksum="bridgescope-desktop-${GITHUB_REF_NAME}-SHA256SUMS.txt"
+          (
+            cd dist
+            sha256sum "${archives[0]}" > "$checksum"
+          )
+      - name: Create or update GitHub Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          assets=(dist/*.zip dist/*-SHA256SUMS.txt)
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+          else
+            args=(
+              release create "$GITHUB_REF_NAME"
+              "${assets[@]}"
+              --verify-tag
+              --title "$GITHUB_REF_NAME"
+              --generate-notes
+            )
+            if [[ "${{ needs.validate.outputs.prerelease }}" == "true" ]]; then
+              args+=(--prerelease)
+            fi
+            gh "${args[@]}"
+          fi
