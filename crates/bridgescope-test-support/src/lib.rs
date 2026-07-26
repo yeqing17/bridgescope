@@ -1,10 +1,10 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 use async_trait::async_trait;
 use bridgescope_adb::{AdbTransport, ShellOutputChunk, ShellSessionHandle, ShellStream};
 use bridgescope_domain::{
     BridgeError, DeviceCapabilities, DeviceDescriptor, DeviceOverview, DeviceSerial, DeviceState,
-    ErrorCode,
+    ErrorCode, OverwritePolicy, RemoteFileEntry, RemoteFileKind, RemotePath,
 };
 use image::{ImageEncoder, codecs::png::PngEncoder};
 use tokio::sync::{RwLock, mpsc};
@@ -17,6 +17,7 @@ const FAKE_SHELL_INTERRUPT: &[u8] = b"^C\r\n\x1b[32mfake-device $\x1b[0m ";
 #[derive(Clone, Debug)]
 pub struct FakeAdbTransport {
     devices: Arc<RwLock<BTreeMap<DeviceSerial, FakeDevice>>>,
+    files: Arc<RwLock<BTreeMap<RemotePath, Option<Vec<u8>>>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -49,6 +50,22 @@ impl Default for FakeAdbTransport {
             storage_used_kib: Some(37 * 1024 * 1024),
             capabilities: DeviceCapabilities::basic_online(),
         };
+        let files = BTreeMap::from([
+            (RemotePath::new("/").expect("valid path"), None),
+            (RemotePath::new("/sdcard").expect("valid path"), None),
+            (
+                RemotePath::new("/sdcard/Download").expect("valid path"),
+                None,
+            ),
+            (
+                RemotePath::new("/sdcard/Download/example.txt").expect("valid path"),
+                Some(b"BridgeScope fake file\n".to_vec()),
+            ),
+            (
+                RemotePath::new("/sdcard/示例 文件.txt").expect("valid path"),
+                Some("Unicode file\n".as_bytes().to_vec()),
+            ),
+        ]);
         Self {
             devices: Arc::new(RwLock::new(BTreeMap::from([(
                 serial,
@@ -57,6 +74,7 @@ impl Default for FakeAdbTransport {
                     overview,
                 },
             )]))),
+            files: Arc::new(RwLock::new(files)),
         }
     }
 }
@@ -237,6 +255,119 @@ impl AdbTransport for FakeAdbTransport {
     async fn capture_screenshot(&self, serial: &DeviceSerial) -> Result<Vec<u8>, BridgeError> {
         self.online_device(serial).await?;
         fake_screenshot_png()
+    }
+
+    async fn list_directory(
+        &self,
+        serial: &DeviceSerial,
+        path: &RemotePath,
+    ) -> Result<Vec<RemoteFileEntry>, BridgeError> {
+        self.online_device(serial).await?;
+        let files = self.files.read().await;
+        if !files.contains_key(path) {
+            return Err(BridgeError::new(
+                ErrorCode::PathNotFound,
+                "file.path_not_found",
+                path.to_string(),
+            ));
+        }
+        if files.get(path).and_then(Option::as_ref).is_some() {
+            return Err(BridgeError::invalid_input("file.not_directory"));
+        }
+        let prefix = if path.as_str() == "/" {
+            "/".to_owned()
+        } else {
+            format!("{}/", path.as_str())
+        };
+        let mut entries = Vec::new();
+        for (entry_path, content) in files.iter() {
+            let rest = entry_path
+                .as_str()
+                .strip_prefix(&prefix)
+                .unwrap_or_default();
+            if rest.is_empty() || rest.contains('/') {
+                continue;
+            }
+            entries.push(RemoteFileEntry {
+                path: entry_path.clone(),
+                name: rest.to_owned(),
+                kind: if content.is_some() {
+                    RemoteFileKind::File
+                } else {
+                    RemoteFileKind::Directory
+                },
+                size_bytes: content.as_ref().map(|bytes| bytes.len() as u64),
+                modified_unix_seconds: None,
+                permissions: None,
+            });
+        }
+        Ok(entries)
+    }
+
+    async fn push_file(
+        &self,
+        serial: &DeviceSerial,
+        local_path: &Path,
+        remote_path: &RemotePath,
+        overwrite: OverwritePolicy,
+    ) -> Result<(), BridgeError> {
+        self.online_device(serial).await?;
+        let bytes = tokio::fs::read(local_path).await.map_err(|error| {
+            BridgeError::new(
+                ErrorCode::PathNotFound,
+                "file.local_source_missing",
+                error.to_string(),
+            )
+        })?;
+        let mut files = self.files.write().await;
+        if files.get(remote_path).is_some_and(Option::is_none) {
+            return Err(BridgeError::invalid_input("file.remote_is_directory"));
+        }
+        if files.contains_key(remote_path) && overwrite == OverwritePolicy::Deny {
+            return Err(BridgeError::new(
+                ErrorCode::AlreadyExists,
+                "file.remote_exists",
+                remote_path.to_string(),
+            ));
+        }
+        files.insert(remote_path.clone(), Some(bytes));
+        Ok(())
+    }
+
+    async fn pull_file(
+        &self,
+        serial: &DeviceSerial,
+        remote_path: &RemotePath,
+        local_path: &Path,
+        overwrite: OverwritePolicy,
+    ) -> Result<(), BridgeError> {
+        self.online_device(serial).await?;
+        let files = self.files.read().await;
+        let Some(content) = files.get(remote_path).and_then(Option::as_ref) else {
+            return Err(BridgeError::new(
+                ErrorCode::PathNotFound,
+                "file.remote_not_file",
+                remote_path.to_string(),
+            ));
+        };
+        if tokio::fs::try_exists(local_path).await.unwrap_or(false)
+            && overwrite == OverwritePolicy::Deny
+        {
+            return Err(BridgeError::new(
+                ErrorCode::AlreadyExists,
+                "file.local_exists",
+                local_path.display().to_string(),
+            ));
+        }
+        tokio::fs::write(local_path, content)
+            .await
+            .map_err(|error| {
+                BridgeError::new(
+                    ErrorCode::AdbFailed,
+                    "file.local_write_failed",
+                    error.to_string(),
+                )
+            })
     }
 }
 

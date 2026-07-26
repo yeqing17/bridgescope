@@ -1,10 +1,143 @@
-use std::fmt;
+use std::{fmt, path::PathBuf};
 
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
 pub const MAX_SHELL_INPUT_BYTES: usize = 64 * 1024;
+const MAX_REMOTE_PATH_BYTES: usize = 4096;
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct RemotePath(String);
+
+impl RemotePath {
+    pub fn new(value: impl Into<String>) -> Result<Self, BridgeError> {
+        let value = value.into();
+        if value.is_empty()
+            || value.len() > MAX_REMOTE_PATH_BYTES
+            || !value.starts_with('/')
+            || value.contains(['\0', '\r', '\n'])
+        {
+            return Err(BridgeError::invalid_input("file.path.invalid"));
+        }
+        let mut components = Vec::new();
+        for component in value.split('/') {
+            match component {
+                "" | "." => {}
+                ".." => {
+                    if components.pop().is_none() {
+                        return Err(BridgeError::invalid_input("file.path.escapes_root"));
+                    }
+                }
+                component if component.chars().any(char::is_control) => {
+                    return Err(BridgeError::invalid_input("file.path.invalid"));
+                }
+                component => components.push(component),
+            }
+        }
+        let normalized = if components.is_empty() {
+            "/".to_owned()
+        } else {
+            format!("/{}", components.join("/"))
+        };
+        Ok(Self(normalized))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    #[must_use]
+    pub fn parent(&self) -> Self {
+        if self.0 == "/" {
+            return Self("/".to_owned());
+        }
+        let parent =
+            self.0.rsplit_once('/').map_or(
+                "/",
+                |(prefix, _)| if prefix.is_empty() { "/" } else { prefix },
+            );
+        Self(parent.to_owned())
+    }
+
+    pub fn join_component(&self, component: &str) -> Result<Self, BridgeError> {
+        if component.is_empty() || component.contains('/') || component == "." || component == ".."
+        {
+            return Err(BridgeError::invalid_input("file.path.component_invalid"));
+        }
+        Self::new(format!("{}/{}", self.0.trim_end_matches('/'), component))
+    }
+
+    #[must_use]
+    pub fn file_name(&self) -> &str {
+        self.0.rsplit('/').next().unwrap_or("")
+    }
+}
+
+impl fmt::Display for RemotePath {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for RemotePath {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::new(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteFileKind {
+    Directory,
+    File,
+    Symlink,
+    Other,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RemoteFileEntry {
+    pub path: RemotePath,
+    pub name: String,
+    pub kind: RemoteFileKind,
+    pub size_bytes: Option<u64>,
+    pub modified_unix_seconds: Option<i64>,
+    pub permissions: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DirectoryListing {
+    pub target: DeviceTarget,
+    pub directory: RemotePath,
+    pub entries: Vec<RemoteFileEntry>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileTransferDirection {
+    Upload,
+    Download,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OverwritePolicy {
+    Deny,
+    ReplaceConfirmed,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FileTransferSummary {
+    pub direction: FileTransferDirection,
+    pub target: DeviceTarget,
+    pub remote_path: RemotePath,
+    pub local_path: PathBuf,
+}
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
@@ -154,7 +287,7 @@ pub enum OperationRisk {
     Privileged,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct OperationId(Uuid);
 
 impl OperationId {
@@ -399,6 +532,10 @@ pub enum ErrorCode {
     InvalidInput,
     TimedOut,
     OutputLimit,
+    PathNotFound,
+    AlreadyExists,
+    PermissionDenied,
+    Cancelled,
     Internal,
 }
 
@@ -455,6 +592,26 @@ pub enum BackendCommand {
         request_id: OperationId,
         prompt: String,
     },
+    ListDirectory {
+        request_id: OperationId,
+        target: DeviceTarget,
+        path: RemotePath,
+    },
+    UploadFile {
+        request_id: OperationId,
+        target: DeviceTarget,
+        local_path: PathBuf,
+        remote_path: RemotePath,
+        overwrite: OverwritePolicy,
+    },
+    DownloadFile {
+        request_id: OperationId,
+        target: DeviceTarget,
+        remote_path: RemotePath,
+        local_path: PathBuf,
+        overwrite: OverwritePolicy,
+    },
+    CancelFileOperation(OperationId),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -517,11 +674,70 @@ pub enum BackendEvent {
         request_id: OperationId,
         error: BridgeError,
     },
+    DirectoryLoading {
+        request_id: OperationId,
+        target: DeviceTarget,
+        path: RemotePath,
+    },
+    DirectoryLoaded {
+        request_id: OperationId,
+        listing: DirectoryListing,
+    },
+    DirectoryFailed {
+        request_id: OperationId,
+        target: DeviceTarget,
+        path: RemotePath,
+        error: BridgeError,
+    },
+    FileTransferStarted {
+        request_id: OperationId,
+        direction: FileTransferDirection,
+        target: DeviceTarget,
+        remote_path: RemotePath,
+        local_path: PathBuf,
+    },
+    FileTransferCompleted {
+        request_id: OperationId,
+        summary: FileTransferSummary,
+    },
+    FileTransferFailed {
+        request_id: OperationId,
+        target: DeviceTarget,
+        error: BridgeError,
+    },
+    FileTransferCancelled {
+        request_id: OperationId,
+        target: DeviceTarget,
+    },
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_paths_normalize_and_reject_escape() {
+        assert_eq!(
+            RemotePath::new("/sdcard/./Download/../demo.txt")
+                .expect("valid")
+                .as_str(),
+            "/sdcard/demo.txt"
+        );
+        assert_eq!(RemotePath::new("/").expect("root").parent().as_str(), "/");
+        assert!(RemotePath::new("relative").is_err());
+        assert!(RemotePath::new("/../../escape").is_err());
+        assert!(RemotePath::new("/bad\nname").is_err());
+    }
+
+    #[test]
+    fn remote_path_joins_safe_components() {
+        let path = RemotePath::new("/sdcard").expect("valid");
+        assert_eq!(
+            path.join_component("Download").expect("valid").as_str(),
+            "/sdcard/Download"
+        );
+        assert!(path.join_component("../escape").is_err());
+    }
 
     #[test]
     fn serial_rejects_control_characters() {

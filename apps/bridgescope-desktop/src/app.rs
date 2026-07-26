@@ -5,7 +5,7 @@ use eframe::egui::{self, Color32, RichText};
 
 use crate::{
     i18n::{Language, text},
-    panels::{assistant, overview, screenshot, shell},
+    panels::{assistant, files, overview, screenshot, shell},
     runtime::RuntimeBridge,
     theme,
 };
@@ -22,11 +22,10 @@ enum Panel {
     Screenshot,
     Logcat,
     WebView,
-    Assistant,
 }
 
 impl Panel {
-    const ALL: [Self; 11] = [
+    const ALL: [Self; 10] = [
         Self::Overview,
         Self::Files,
         Self::Applications,
@@ -37,7 +36,6 @@ impl Panel {
         Self::Screenshot,
         Self::Logcat,
         Self::WebView,
-        Self::Assistant,
     ];
 
     const fn key(self) -> &'static str {
@@ -52,9 +50,16 @@ impl Panel {
             Self::Screenshot => "screenshot",
             Self::Logcat => "logcat",
             Self::WebView => "webview",
-            Self::Assistant => "assistant",
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum AssistantPlacement {
+    #[default]
+    Hidden,
+    DockedRight,
+    Floating,
 }
 
 #[derive(Default)]
@@ -71,6 +76,8 @@ pub struct BridgeScopeApp {
     shell: shell::ShellPanelState,
     screenshot: screenshot::ScreenshotPanelState,
     assistant: assistant::AssistantPanelState,
+    assistant_placement: AssistantPlacement,
+    files: files::FilesPanelState,
     active_panel: Panel,
     language: Language,
     dark_mode: bool,
@@ -92,6 +99,8 @@ impl BridgeScopeApp {
             shell: shell::ShellPanelState::default(),
             screenshot: screenshot::ScreenshotPanelState::default(),
             assistant: assistant::AssistantPanelState::default(),
+            assistant_placement: AssistantPlacement::Hidden,
+            files: files::FilesPanelState::default(),
             active_panel: Panel::Overview,
             language: Language::English,
             dark_mode: true,
@@ -108,6 +117,7 @@ impl BridgeScopeApp {
             self.screenshot
                 .handle_event(&self.runtime.context(), &event);
             self.assistant.handle_event(&event);
+            self.files.handle_event(&event);
             match event {
                 BackendEvent::AdbReady { path, version } => {
                     self.adb_path = Some(path);
@@ -145,7 +155,14 @@ impl BridgeScopeApp {
                 | BackendEvent::AiReady { .. }
                 | BackendEvent::AiUnavailable { .. }
                 | BackendEvent::AiChatCompleted { .. }
-                | BackendEvent::AiChatFailed { .. } => {}
+                | BackendEvent::AiChatFailed { .. }
+                | BackendEvent::DirectoryLoading { .. }
+                | BackendEvent::DirectoryLoaded { .. }
+                | BackendEvent::DirectoryFailed { .. }
+                | BackendEvent::FileTransferStarted { .. }
+                | BackendEvent::FileTransferCompleted { .. }
+                | BackendEvent::FileTransferFailed { .. }
+                | BackendEvent::FileTransferCancelled { .. } => {}
             }
         }
     }
@@ -264,6 +281,20 @@ impl BridgeScopeApp {
                 }
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                     ui.small("BridgeScope 0.1 foundation");
+                    if ui
+                        .selectable_label(
+                            self.assistant_placement != AssistantPlacement::Hidden,
+                            text(self.language, "assistant"),
+                        )
+                        .clicked()
+                    {
+                        self.assistant_placement =
+                            if self.assistant_placement == AssistantPlacement::Hidden {
+                                AssistantPlacement::DockedRight
+                            } else {
+                                AssistantPlacement::Hidden
+                            };
+                    }
                 });
             });
     }
@@ -296,7 +327,11 @@ impl BridgeScopeApp {
                 }
                 Panel::Shell => shell::show(ui, selected.as_ref(), &mut self.shell),
                 Panel::Screenshot => screenshot::show(ui, selected.as_ref(), &mut self.screenshot),
-                Panel::Assistant => assistant::show(ui, &mut self.assistant),
+                Panel::Files => files::show(
+                    ui,
+                    &mut self.files,
+                    selected.as_ref().map(DeviceRecord::target).as_ref(),
+                ),
                 _ => {
                     ui.vertical_centered(|ui| {
                         ui.add_space(100.0);
@@ -312,6 +347,44 @@ impl BridgeScopeApp {
                 self.send(command);
             }
         });
+    }
+
+    fn assistant_dock(&mut self, context: &egui::Context) {
+        egui::SidePanel::right("assistant-dock")
+            .resizable(true)
+            .default_width(360.0)
+            .width_range(280.0..=640.0)
+            .show(context, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("Float").clicked() {
+                        self.assistant_placement = AssistantPlacement::Floating;
+                    }
+                    if ui.button("Close").clicked() {
+                        self.assistant_placement = AssistantPlacement::Hidden;
+                    }
+                });
+                for command in assistant::show(ui, &mut self.assistant) {
+                    self.send(command);
+                }
+            });
+    }
+
+    fn assistant_window(&mut self, context: &egui::Context) {
+        let mut open = true;
+        egui::Window::new(text(self.language, "assistant"))
+            .open(&mut open)
+            .default_size([420.0, 600.0])
+            .show(context, |ui| {
+                if ui.button("Dock right").clicked() {
+                    self.assistant_placement = AssistantPlacement::DockedRight;
+                }
+                for command in assistant::show(ui, &mut self.assistant) {
+                    self.send(command);
+                }
+            });
+        if !open {
+            self.assistant_placement = AssistantPlacement::Hidden;
+        }
     }
 
     fn device_manager(&mut self, context: &egui::Context) {
@@ -376,9 +449,21 @@ impl BridgeScopeApp {
 impl eframe::App for BridgeScopeApp {
     fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
         self.process_events();
+        if let Some(command) = self
+            .files
+            .reconcile_target(self.selected_record().map(DeviceRecord::target))
+        {
+            self.send(command);
+        }
         self.top_bar(context);
         self.side_bar(context);
+        if self.assistant_placement == AssistantPlacement::DockedRight {
+            self.assistant_dock(context);
+        }
         self.central_panel(context);
+        if self.assistant_placement == AssistantPlacement::Floating {
+            self.assistant_window(context);
+        }
         if self.windows.devices {
             self.device_manager(context);
         }
@@ -394,10 +479,9 @@ mod tests {
 
     #[test]
     fn all_expected_panels_are_present() {
-        assert_eq!(Panel::ALL.len(), 11);
+        assert_eq!(Panel::ALL.len(), 10);
         assert_eq!(Panel::ALL[0], Panel::Overview);
         assert_eq!(Panel::ALL[9], Panel::WebView);
-        assert_eq!(Panel::ALL[10], Panel::Assistant);
     }
 
     #[test]

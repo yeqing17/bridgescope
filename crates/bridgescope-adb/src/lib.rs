@@ -1,3 +1,4 @@
+mod files;
 mod process;
 mod screenshot;
 mod shell;
@@ -13,7 +14,7 @@ use std::{
 use async_trait::async_trait;
 use bridgescope_domain::{
     BridgeError, DeviceCapabilities, DeviceDescriptor, DeviceOverview, DeviceSerial, DeviceState,
-    ErrorCode,
+    ErrorCode, OverwritePolicy, RemoteFileEntry, RemotePath,
 };
 
 pub use shell::{ShellOutputChunk, ShellSessionHandle, ShellStream};
@@ -95,6 +96,25 @@ pub trait AdbTransport: Send + Sync {
     async fn device_overview(&self, serial: &DeviceSerial) -> Result<DeviceOverview, BridgeError>;
     async fn start_shell(&self, serial: &DeviceSerial) -> Result<ShellSessionHandle, BridgeError>;
     async fn capture_screenshot(&self, serial: &DeviceSerial) -> Result<Vec<u8>, BridgeError>;
+    async fn list_directory(
+        &self,
+        serial: &DeviceSerial,
+        path: &RemotePath,
+    ) -> Result<Vec<RemoteFileEntry>, BridgeError>;
+    async fn push_file(
+        &self,
+        serial: &DeviceSerial,
+        local_path: &Path,
+        remote_path: &RemotePath,
+        overwrite: OverwritePolicy,
+    ) -> Result<(), BridgeError>;
+    async fn pull_file(
+        &self,
+        serial: &DeviceSerial,
+        remote_path: &RemotePath,
+        local_path: &Path,
+        overwrite: OverwritePolicy,
+    ) -> Result<(), BridgeError>;
 }
 
 #[derive(Clone, Debug)]
@@ -248,6 +268,34 @@ impl AdbTransport for ProcessAdbTransport {
 
     async fn capture_screenshot(&self, serial: &DeviceSerial) -> Result<Vec<u8>, BridgeError> {
         screenshot::capture_screenshot(&self.executable, serial).await
+    }
+
+    async fn list_directory(
+        &self,
+        serial: &DeviceSerial,
+        path: &RemotePath,
+    ) -> Result<Vec<RemoteFileEntry>, BridgeError> {
+        files::list_directory(&self.executable, serial, path, self.timeout).await
+    }
+
+    async fn push_file(
+        &self,
+        serial: &DeviceSerial,
+        local_path: &Path,
+        remote_path: &RemotePath,
+        overwrite: OverwritePolicy,
+    ) -> Result<(), BridgeError> {
+        files::push_file(&self.executable, serial, local_path, remote_path, overwrite).await
+    }
+
+    async fn pull_file(
+        &self,
+        serial: &DeviceSerial,
+        remote_path: &RemotePath,
+        local_path: &Path,
+        overwrite: OverwritePolicy,
+    ) -> Result<(), BridgeError> {
+        files::pull_file(&self.executable, serial, remote_path, local_path, overwrite).await
     }
 }
 

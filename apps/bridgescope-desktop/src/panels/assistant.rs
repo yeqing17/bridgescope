@@ -122,11 +122,13 @@ no access to device data until you grant it.",
     }
 
     ui.horizontal(|ui| {
+        let input_width = (ui.available_width() - 90.0).max(80.0);
         let response = ui.add_enabled(
             state.ready && state.pending.is_none(),
-            egui::TextEdit::singleline(&mut state.input)
+            egui::TextEdit::multiline(&mut state.input)
                 .hint_text("Ask the assistant…")
-                .desired_width(ui.available_width() - 90.0),
+                .desired_rows(2)
+                .desired_width(input_width),
         );
         let submit = response.lost_focus()
             && ui.input(|input| input.key_pressed(egui::Key::Enter))

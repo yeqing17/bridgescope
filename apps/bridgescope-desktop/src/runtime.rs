@@ -3,8 +3,9 @@ use std::{collections::HashMap, io::Cursor, path::PathBuf, sync::Arc, thread, ti
 use bridgescope_adb::{AdbLocator, AdbTransport, ProcessAdbTransport, ShellSessionHandle};
 use bridgescope_device::DeviceRegistry;
 use bridgescope_domain::{
-    BackendCommand, BackendEvent, BridgeError, DeviceTarget, ErrorCode, RawScreenshotPng,
-    ScreenshotData, ScreenshotFormat, ScreenshotImage, ShellSessionId,
+    BackendCommand, BackendEvent, BridgeError, DeviceTarget, ErrorCode, OverwritePolicy,
+    RawScreenshotPng, RemotePath, ScreenshotData, ScreenshotFormat, ScreenshotImage,
+    ShellSessionId,
 };
 use bridgescope_test_support::FakeAdbTransport;
 use eframe::egui;
@@ -162,6 +163,18 @@ async fn run_backend(
                             events.clone(),
                             context.clone(),
                         ).await;
+                    }
+                    BackendCommand::ListDirectory { request_id, target, path } => {
+                        list_directory(transport.as_ref(), &registry, request_id, target, path, &events, &context).await;
+                    }
+                    BackendCommand::UploadFile { request_id, target, local_path, remote_path, overwrite } => {
+                        transfer_file(transport.as_ref(), &registry, request_id, target, local_path, remote_path, overwrite, true, &events, &context).await;
+                    }
+                    BackendCommand::DownloadFile { request_id, target, remote_path, local_path, overwrite } => {
+                        transfer_file(transport.as_ref(), &registry, request_id, target, local_path, remote_path, overwrite, false, &events, &context).await;
+                    }
+                    BackendCommand::CancelFileOperation(_request_id) => {
+                        // File subprocess cancellation will be wired with active task handles.
                     }
                 }
             }
@@ -325,6 +338,163 @@ async fn capture_screenshot(
                 &events,
                 &context,
                 BackendEvent::ScreenshotFailed {
+                    request_id,
+                    target,
+                    error,
+                },
+            )
+            .await;
+        }
+    }
+}
+
+async fn list_directory(
+    transport: &dyn AdbTransport,
+    registry: &DeviceRegistry,
+    request_id: bridgescope_domain::OperationId,
+    target: DeviceTarget,
+    path: RemotePath,
+    events: &mpsc::Sender<BackendEvent>,
+    context: &egui::Context,
+) {
+    if registry.current_online(&target).is_none() {
+        send_event(
+            events,
+            context,
+            BackendEvent::DirectoryFailed {
+                request_id,
+                target,
+                path,
+                error: BridgeError::new(
+                    ErrorCode::DeviceUnavailable,
+                    "device.target_stale",
+                    "device is no longer online",
+                ),
+            },
+        )
+        .await;
+        return;
+    }
+    send_event(
+        events,
+        context,
+        BackendEvent::DirectoryLoading {
+            request_id,
+            target: target.clone(),
+            path: path.clone(),
+        },
+    )
+    .await;
+    match transport.list_directory(&target.serial, &path).await {
+        Ok(entries) => {
+            send_event(
+                events,
+                context,
+                BackendEvent::DirectoryLoaded {
+                    request_id,
+                    listing: bridgescope_domain::DirectoryListing {
+                        target,
+                        directory: path,
+                        entries,
+                    },
+                },
+            )
+            .await;
+        }
+        Err(error) => {
+            send_event(
+                events,
+                context,
+                BackendEvent::DirectoryFailed {
+                    request_id,
+                    target,
+                    path,
+                    error,
+                },
+            )
+            .await;
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn transfer_file(
+    transport: &dyn AdbTransport,
+    registry: &DeviceRegistry,
+    request_id: bridgescope_domain::OperationId,
+    target: DeviceTarget,
+    local_path: PathBuf,
+    remote_path: RemotePath,
+    overwrite: OverwritePolicy,
+    upload: bool,
+    events: &mpsc::Sender<BackendEvent>,
+    context: &egui::Context,
+) {
+    if registry.current_online(&target).is_none() {
+        send_event(
+            events,
+            context,
+            BackendEvent::FileTransferFailed {
+                request_id,
+                target,
+                error: BridgeError::new(
+                    ErrorCode::DeviceUnavailable,
+                    "device.target_stale",
+                    "device is no longer online",
+                ),
+            },
+        )
+        .await;
+        return;
+    }
+    let direction = if upload {
+        bridgescope_domain::FileTransferDirection::Upload
+    } else {
+        bridgescope_domain::FileTransferDirection::Download
+    };
+    send_event(
+        events,
+        context,
+        BackendEvent::FileTransferStarted {
+            request_id,
+            direction,
+            target: target.clone(),
+            remote_path: remote_path.clone(),
+            local_path: local_path.clone(),
+        },
+    )
+    .await;
+    let result = if upload {
+        transport
+            .push_file(&target.serial, &local_path, &remote_path, overwrite)
+            .await
+    } else {
+        transport
+            .pull_file(&target.serial, &remote_path, &local_path, overwrite)
+            .await
+    };
+    match result {
+        Ok(()) => {
+            send_event(
+                events,
+                context,
+                BackendEvent::FileTransferCompleted {
+                    request_id,
+                    summary: bridgescope_domain::FileTransferSummary {
+                        direction,
+                        target,
+                        remote_path,
+                        local_path,
+                    },
+                },
+            )
+            .await;
+        }
+        Err(error) => {
+            send_event(
+                events,
+                context,
+                BackendEvent::FileTransferFailed {
                     request_id,
                     target,
                     error,
