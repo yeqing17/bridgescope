@@ -102,7 +102,7 @@ impl BridgeScopeApp {
             assistant_placement: AssistantPlacement::Hidden,
             files: files::FilesPanelState::default(),
             active_panel: Panel::Overview,
-            language: Language::English,
+            language: Language::Chinese,
             dark_mode: true,
             adb_path: None,
             adb_version: None,
