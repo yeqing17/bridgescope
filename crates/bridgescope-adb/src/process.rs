@@ -14,10 +14,13 @@ pub(crate) struct ProcessOutput {
     pub exit_code: Option<i32>,
 }
 
+#[cfg(windows)]
 pub(crate) fn configure_command(command: &mut Command) {
-    #[cfg(windows)]
     command.creation_flags(0x0800_0000);
 }
+
+#[cfg(not(windows))]
+pub(crate) fn configure_command(_: &mut Command) {}
 
 pub(crate) async fn run_bounded(
     executable: &Path,
