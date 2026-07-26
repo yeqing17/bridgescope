@@ -14,6 +14,11 @@ pub(crate) struct ProcessOutput {
     pub exit_code: Option<i32>,
 }
 
+pub(crate) fn configure_command(command: &mut Command) {
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000);
+}
+
 pub(crate) async fn run_bounded(
     executable: &Path,
     arguments: Vec<OsString>,
@@ -40,16 +45,17 @@ pub(crate) async fn run_bounded_cancellable(
     stderr_limit: usize,
     cancellation: CancellationToken,
 ) -> Result<ProcessOutput, BridgeError> {
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .args(arguments)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|error| {
-            BridgeError::new(ErrorCode::AdbFailed, "adb.spawn_failed", error.to_string())
-        })?;
+        .kill_on_drop(true);
+    configure_command(&mut command);
+    let mut child = command.spawn().map_err(|error| {
+        BridgeError::new(ErrorCode::AdbFailed, "adb.spawn_failed", error.to_string())
+    })?;
 
     let stdout = child.stdout.take().ok_or_else(|| {
         BridgeError::new(

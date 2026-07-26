@@ -1,5 +1,6 @@
 use std::{ffi::OsString, future::Future, path::PathBuf, process::Stdio, time::Duration};
 
+use crate::process::configure_command;
 use bridgescope_domain::{BridgeError, DeviceSerial, ErrorCode};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
@@ -112,20 +113,21 @@ pub(crate) fn start_shell(
     executable: PathBuf,
     serial: &DeviceSerial,
 ) -> Result<ShellSessionHandle, BridgeError> {
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .args(shell_arguments(serial))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|error| {
-            BridgeError::new(
-                ErrorCode::AdbFailed,
-                "shell.spawn_failed",
-                error.to_string(),
-            )
-        })?;
+        .kill_on_drop(true);
+    configure_command(&mut command);
+    let mut child = command.spawn().map_err(|error| {
+        BridgeError::new(
+            ErrorCode::AdbFailed,
+            "shell.spawn_failed",
+            error.to_string(),
+        )
+    })?;
 
     let stdin = child.stdin.take().ok_or_else(|| missing_pipe("stdin"))?;
     let stdout = child.stdout.take().ok_or_else(|| missing_pipe("stdout"))?;
