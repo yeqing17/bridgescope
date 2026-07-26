@@ -117,7 +117,10 @@ impl BridgeScopeApp {
             self.screenshot
                 .handle_event(&self.runtime.context(), &event);
             self.assistant.handle_event(&event);
-            self.files.handle_event(&event);
+            let file_commands = self.files.handle_event(&event);
+            for command in file_commands {
+                self.send(command);
+            }
             match event {
                 BackendEvent::AdbReady { path, version } => {
                     self.adb_path = Some(path);
@@ -162,7 +165,10 @@ impl BridgeScopeApp {
                 | BackendEvent::FileTransferStarted { .. }
                 | BackendEvent::FileTransferCompleted { .. }
                 | BackendEvent::FileTransferFailed { .. }
-                | BackendEvent::FileTransferCancelled { .. } => {}
+                | BackendEvent::FileTransferCancelled { .. }
+                | BackendEvent::FileMutationStarted { .. }
+                | BackendEvent::FileMutationCompleted { .. }
+                | BackendEvent::FileMutationFailed { .. } => {}
             }
         }
     }

@@ -2,7 +2,7 @@
 
 BridgeScope is an independently implemented, pure-Rust desktop toolkit for inspecting and managing Android devices through ADB.
 
-> Status: **0.2 early development.** The current milestone provides ADB discovery, explicit device selection, a device overview, an interactive Android shell, binary-safe screenshots, a provider-neutral AI assistant surface, and a fake-device development backend. Other panels remain roadmap placeholders.
+> Status: **0.4 early development.** The current milestone provides ADB discovery, explicit device selection, a device overview, an interactive Android shell, binary-safe screenshots, a provider-neutral AI assistant surface, and a remote file manager with explicit transfer confirmation and cancellation. File deletion is restricted to regular files; directory deletion is intentionally unavailable. Other panels remain roadmap placeholders.
 
 ## Goals
 
@@ -50,6 +50,7 @@ cargo build --workspace --release
 
 - **Interactive Shell:** starts `adb -s SERIAL shell -tt`, streams keyboard input and ANSI output, and supports explicit close/reconnect. This initial adapter uses a fixed 80×24 remote PTY; remote stderr is usually merged and true remote resize awaits native ADB shell-v2.
 - **Screenshot:** captures with binary-safe `adb -s SERIAL exec-out screencap -p`, validates/decodes PNG off the UI thread, displays Fit/100% modes, copies the decoded image, and saves the original PNG.
+- **File manager:** browses remote directories, uploads and downloads files with explicit overwrite confirmation, supports cancellation, creates directories, renames entries, and deletes regular files only. Operations remain bound to the selected device generation and refresh the current listing after completion.
 
 ## Safety
 

@@ -310,7 +310,15 @@ impl AdbTransport for FakeAdbTransport {
         local_path: &Path,
         remote_path: &RemotePath,
         overwrite: OverwritePolicy,
+        cancellation: CancellationToken,
     ) -> Result<(), BridgeError> {
+        if cancellation.is_cancelled() {
+            return Err(BridgeError::new(
+                ErrorCode::Cancelled,
+                "file.cancelled",
+                "file operation cancelled",
+            ));
+        }
         self.online_device(serial).await?;
         let bytes = tokio::fs::read(local_path).await.map_err(|error| {
             BridgeError::new(
@@ -340,7 +348,15 @@ impl AdbTransport for FakeAdbTransport {
         remote_path: &RemotePath,
         local_path: &Path,
         overwrite: OverwritePolicy,
+        cancellation: CancellationToken,
     ) -> Result<(), BridgeError> {
+        if cancellation.is_cancelled() {
+            return Err(BridgeError::new(
+                ErrorCode::Cancelled,
+                "file.cancelled",
+                "file operation cancelled",
+            ));
+        }
         self.online_device(serial).await?;
         let files = self.files.read().await;
         let Some(content) = files.get(remote_path).and_then(Option::as_ref) else {
@@ -368,6 +384,107 @@ impl AdbTransport for FakeAdbTransport {
                     error.to_string(),
                 )
             })
+    }
+
+    async fn create_directory(
+        &self,
+        serial: &DeviceSerial,
+        path: &RemotePath,
+    ) -> Result<(), BridgeError> {
+        self.online_device(serial).await?;
+        let mut files = self.files.write().await;
+        if files.contains_key(path) {
+            return Err(BridgeError::new(
+                ErrorCode::AlreadyExists,
+                "file.remote_exists",
+                path.to_string(),
+            ));
+        }
+        if !files.get(&path.parent()).is_some_and(Option::is_none) {
+            return Err(BridgeError::new(
+                ErrorCode::PathNotFound,
+                "file.parent_missing",
+                path.parent().to_string(),
+            ));
+        }
+        files.insert(path.clone(), None);
+        Ok(())
+    }
+
+    async fn rename_entry(
+        &self,
+        serial: &DeviceSerial,
+        source: &RemotePath,
+        destination: &RemotePath,
+    ) -> Result<(), BridgeError> {
+        self.online_device(serial).await?;
+        if source.as_str() == "/" || source == destination {
+            return Err(BridgeError::invalid_input("file.rename_invalid"));
+        }
+        let mut files = self.files.write().await;
+        if !files.contains_key(source) {
+            return Err(BridgeError::new(
+                ErrorCode::PathNotFound,
+                "file.path_not_found",
+                source.to_string(),
+            ));
+        }
+        if files.contains_key(destination) {
+            return Err(BridgeError::new(
+                ErrorCode::AlreadyExists,
+                "file.remote_exists",
+                destination.to_string(),
+            ));
+        }
+        if !files
+            .get(&destination.parent())
+            .is_some_and(Option::is_none)
+        {
+            return Err(BridgeError::new(
+                ErrorCode::PathNotFound,
+                "file.parent_missing",
+                destination.parent().to_string(),
+            ));
+        }
+        let prefix = format!("{}/", source.as_str());
+        let moved = files
+            .iter()
+            .filter(|(path, _)| *path == source || path.as_str().starts_with(&prefix))
+            .map(|(path, content)| (path.clone(), content.clone()))
+            .collect::<Vec<_>>();
+        for (path, _) in &moved {
+            files.remove(path);
+        }
+        for (path, content) in moved {
+            let suffix = path
+                .as_str()
+                .strip_prefix(source.as_str())
+                .unwrap_or_default();
+            let new_path = RemotePath::new(format!("{}{suffix}", destination.as_str()))?;
+            files.insert(new_path, content);
+        }
+        Ok(())
+    }
+
+    async fn delete_file(
+        &self,
+        serial: &DeviceSerial,
+        path: &RemotePath,
+    ) -> Result<(), BridgeError> {
+        self.online_device(serial).await?;
+        let mut files = self.files.write().await;
+        match files.get(path) {
+            Some(Some(_)) => {
+                files.remove(path);
+                Ok(())
+            }
+            Some(None) => Err(BridgeError::invalid_input("file.delete_not_regular_file")),
+            None => Err(BridgeError::new(
+                ErrorCode::PathNotFound,
+                "file.path_not_found",
+                path.to_string(),
+            )),
+        }
     }
 }
 

@@ -3,13 +3,15 @@ use std::{collections::HashMap, io::Cursor, path::PathBuf, sync::Arc, thread, ti
 use bridgescope_adb::{AdbLocator, AdbTransport, ProcessAdbTransport, ShellSessionHandle};
 use bridgescope_device::DeviceRegistry;
 use bridgescope_domain::{
-    BackendCommand, BackendEvent, BridgeError, DeviceTarget, ErrorCode, OverwritePolicy,
-    RawScreenshotPng, RemotePath, ScreenshotData, ScreenshotFormat, ScreenshotImage,
+    BackendCommand, BackendEvent, BridgeError, DeviceTarget, ErrorCode, FileTransferDirection,
+    FileTransferSummary, OperationId, OverwritePolicy, RawScreenshotPng, RemoteFileMutationKind,
+    RemoteFileMutationSummary, RemotePath, ScreenshotData, ScreenshotFormat, ScreenshotImage,
     ShellSessionId,
 };
 use bridgescope_test_support::FakeAdbTransport;
 use eframe::egui;
 use tokio::{runtime::Builder, sync::mpsc, time::MissedTickBehavior};
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 const CHANNEL_CAPACITY: usize = 64;
@@ -20,6 +22,24 @@ const MAX_SCREENSHOT_PIXELS: u64 = 16_777_216;
 struct ActiveShell {
     input: mpsc::Sender<Vec<u8>>,
     handle: ShellSessionHandle,
+}
+
+struct ActiveTransfer {
+    target: DeviceTarget,
+    cancellation: CancellationToken,
+}
+
+enum FileTaskResult {
+    Transfer {
+        request_id: OperationId,
+        target: DeviceTarget,
+        result: Result<FileTransferSummary, BridgeError>,
+    },
+    Mutation {
+        request_id: OperationId,
+        target: DeviceTarget,
+        result: Result<RemoteFileMutationSummary, BridgeError>,
+    },
 }
 
 pub struct RuntimeBridge {
@@ -76,6 +96,7 @@ impl RuntimeBridge {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 async fn run_backend(
     mut commands: mpsc::Receiver<BackendCommand>,
     events: mpsc::Sender<BackendEvent>,
@@ -85,6 +106,8 @@ async fn run_backend(
     let ai_provider = initialize_ai(&events, &context).await;
     let mut registry = DeviceRegistry::default();
     let mut shells = HashMap::<ShellSessionId, ActiveShell>::new();
+    let mut transfers = HashMap::<OperationId, ActiveTransfer>::new();
+    let (file_result_tx, mut file_result_rx) = mpsc::channel(CHANNEL_CAPACITY);
     let mut interval = tokio::time::interval(REFRESH_INTERVAL);
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
@@ -92,6 +115,16 @@ async fn run_backend(
         tokio::select! {
             _ = interval.tick() => {
                 refresh_devices(transport.as_ref(), &mut registry, &events, &context).await;
+                for active in transfers.values() {
+                    if registry.current_online(&active.target).is_none() {
+                        active.cancellation.cancel();
+                    }
+                }
+            }
+            result = file_result_rx.recv() => {
+                if let Some(result) = result {
+                    finish_file_task(result, &mut transfers, &events, &context).await;
+                }
             }
             command = commands.recv() => {
                 let Some(command) = command else { break };
@@ -168,13 +201,24 @@ async fn run_backend(
                         list_directory(transport.as_ref(), &registry, request_id, target, path, &events, &context).await;
                     }
                     BackendCommand::UploadFile { request_id, target, local_path, remote_path, overwrite } => {
-                        transfer_file(transport.as_ref(), &registry, request_id, target, local_path, remote_path, overwrite, true, &events, &context).await;
+                        start_transfer(transport.clone(), &registry, &mut transfers, file_result_tx.clone(), request_id, target, local_path, remote_path, overwrite, true, &events, &context).await;
                     }
                     BackendCommand::DownloadFile { request_id, target, remote_path, local_path, overwrite } => {
-                        transfer_file(transport.as_ref(), &registry, request_id, target, local_path, remote_path, overwrite, false, &events, &context).await;
+                        start_transfer(transport.clone(), &registry, &mut transfers, file_result_tx.clone(), request_id, target, local_path, remote_path, overwrite, false, &events, &context).await;
                     }
-                    BackendCommand::CancelFileOperation(_request_id) => {
-                        // File subprocess cancellation will be wired with active task handles.
+                    BackendCommand::CancelFileOperation(request_id) => {
+                        if let Some(active) = transfers.get(&request_id) {
+                            active.cancellation.cancel();
+                        }
+                    }
+                    BackendCommand::CreateDirectory { request_id, target, path } => {
+                        start_mutation(transport.clone(), &registry, file_result_tx.clone(), request_id, target, RemoteFileMutationKind::CreateDirectory, path, None, true).await;
+                    }
+                    BackendCommand::RenameRemoteEntry { request_id, target, source, destination } => {
+                        start_mutation(transport.clone(), &registry, file_result_tx.clone(), request_id, target, RemoteFileMutationKind::Rename, source, Some(destination), true).await;
+                    }
+                    BackendCommand::DeleteRemoteFile { request_id, target, path, confirmed } => {
+                        start_mutation(transport.clone(), &registry, file_result_tx.clone(), request_id, target, RemoteFileMutationKind::DeleteFile, path, None, confirmed).await;
                     }
                 }
             }
@@ -418,10 +462,12 @@ async fn list_directory(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn transfer_file(
-    transport: &dyn AdbTransport,
+async fn start_transfer(
+    transport: Arc<dyn AdbTransport>,
     registry: &DeviceRegistry,
-    request_id: bridgescope_domain::OperationId,
+    transfers: &mut HashMap<OperationId, ActiveTransfer>,
+    results: mpsc::Sender<FileTaskResult>,
+    request_id: OperationId,
     target: DeviceTarget,
     local_path: PathBuf,
     remote_path: RemotePath,
@@ -448,10 +494,18 @@ async fn transfer_file(
         return;
     }
     let direction = if upload {
-        bridgescope_domain::FileTransferDirection::Upload
+        FileTransferDirection::Upload
     } else {
-        bridgescope_domain::FileTransferDirection::Download
+        FileTransferDirection::Download
     };
+    let cancellation = CancellationToken::new();
+    transfers.insert(
+        request_id,
+        ActiveTransfer {
+            target: target.clone(),
+            cancellation: cancellation.clone(),
+        },
+    );
     send_event(
         events,
         context,
@@ -464,45 +518,161 @@ async fn transfer_file(
         },
     )
     .await;
-    let result = if upload {
-        transport
-            .push_file(&target.serial, &local_path, &remote_path, overwrite)
-            .await
-    } else {
-        transport
-            .pull_file(&target.serial, &remote_path, &local_path, overwrite)
-            .await
-    };
-    match result {
-        Ok(()) => {
-            send_event(
-                events,
-                context,
-                BackendEvent::FileTransferCompleted {
-                    request_id,
-                    summary: bridgescope_domain::FileTransferSummary {
-                        direction,
-                        target,
-                        remote_path,
-                        local_path,
-                    },
-                },
-            )
+    tokio::spawn(async move {
+        let transfer = if upload {
+            transport
+                .push_file(
+                    &target.serial,
+                    &local_path,
+                    &remote_path,
+                    overwrite,
+                    cancellation,
+                )
+                .await
+        } else {
+            transport
+                .pull_file(
+                    &target.serial,
+                    &remote_path,
+                    &local_path,
+                    overwrite,
+                    cancellation,
+                )
+                .await
+        };
+        let result = transfer.map(|()| FileTransferSummary {
+            direction,
+            target: target.clone(),
+            remote_path,
+            local_path,
+        });
+        let _ = results
+            .send(FileTaskResult::Transfer {
+                request_id,
+                target,
+                result,
+            })
             .await;
-        }
-        Err(error) => {
-            send_event(
-                events,
-                context,
-                BackendEvent::FileTransferFailed {
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn start_mutation(
+    transport: Arc<dyn AdbTransport>,
+    registry: &DeviceRegistry,
+    results: mpsc::Sender<FileTaskResult>,
+    request_id: OperationId,
+    target: DeviceTarget,
+    kind: RemoteFileMutationKind,
+    path: RemotePath,
+    destination: Option<RemotePath>,
+    confirmed: bool,
+) {
+    let unavailable = registry.current_online(&target).is_none();
+    let invalid_delete = kind == RemoteFileMutationKind::DeleteFile && !confirmed;
+    let result = if unavailable {
+        Err(BridgeError::new(
+            ErrorCode::DeviceUnavailable,
+            "device.target_stale",
+            "device is no longer online",
+        ))
+    } else if invalid_delete {
+        Err(BridgeError::invalid_input(
+            "file.delete_confirmation_required",
+        ))
+    } else {
+        Ok(())
+    };
+    if let Err(error) = result {
+        let _ = results
+            .send(FileTaskResult::Mutation {
+                request_id,
+                target: target.clone(),
+                result: Err(error),
+            })
+            .await;
+        return;
+    }
+    tokio::spawn(async move {
+        let operation = match kind {
+            RemoteFileMutationKind::CreateDirectory => {
+                transport.create_directory(&target.serial, &path).await
+            }
+            RemoteFileMutationKind::Rename => match destination.as_ref() {
+                Some(destination) => {
+                    transport
+                        .rename_entry(&target.serial, &path, destination)
+                        .await
+                }
+                None => Err(BridgeError::invalid_input(
+                    "file.rename_destination_missing",
+                )),
+            },
+            RemoteFileMutationKind::DeleteFile => {
+                transport.delete_file(&target.serial, &path).await
+            }
+        };
+        let result = operation.map(|()| RemoteFileMutationSummary {
+            kind,
+            target: target.clone(),
+            path,
+            destination,
+        });
+        let _ = results
+            .send(FileTaskResult::Mutation {
+                request_id,
+                target,
+                result,
+            })
+            .await;
+    });
+}
+
+async fn finish_file_task(
+    task: FileTaskResult,
+    transfers: &mut HashMap<OperationId, ActiveTransfer>,
+    events: &mpsc::Sender<BackendEvent>,
+    context: &egui::Context,
+) {
+    let event = match task {
+        FileTaskResult::Transfer {
+            request_id,
+            target,
+            result,
+        } => {
+            transfers.remove(&request_id);
+            match result {
+                Ok(summary) => BackendEvent::FileTransferCompleted {
+                    request_id,
+                    summary,
+                },
+                Err(error) if error.code == ErrorCode::Cancelled => {
+                    BackendEvent::FileTransferCancelled { request_id, target }
+                }
+                Err(error) => BackendEvent::FileTransferFailed {
                     request_id,
                     target,
                     error,
                 },
-            )
-            .await;
+            }
         }
-    }
+        FileTaskResult::Mutation {
+            request_id,
+            target,
+            result,
+        } => match result {
+            Ok(summary) => BackendEvent::FileMutationCompleted {
+                request_id,
+                summary,
+            },
+            Err(error) => BackendEvent::FileMutationFailed {
+                request_id,
+                target,
+                error,
+            },
+        },
+    };
+    send_event(events, context, event).await;
 }
 
 fn decode_screenshot(png: &[u8]) -> Result<ScreenshotImage, BridgeError> {

@@ -139,6 +139,22 @@ pub struct FileTransferSummary {
     pub local_path: PathBuf,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteFileMutationKind {
+    CreateDirectory,
+    Rename,
+    DeleteFile,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RemoteFileMutationSummary {
+    pub kind: RemoteFileMutationKind,
+    pub target: DeviceTarget,
+    pub path: RemotePath,
+    pub destination: Option<RemotePath>,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
 pub struct DeviceSerial(String);
@@ -612,6 +628,23 @@ pub enum BackendCommand {
         overwrite: OverwritePolicy,
     },
     CancelFileOperation(OperationId),
+    CreateDirectory {
+        request_id: OperationId,
+        target: DeviceTarget,
+        path: RemotePath,
+    },
+    RenameRemoteEntry {
+        request_id: OperationId,
+        target: DeviceTarget,
+        source: RemotePath,
+        destination: RemotePath,
+    },
+    DeleteRemoteFile {
+        request_id: OperationId,
+        target: DeviceTarget,
+        path: RemotePath,
+        confirmed: bool,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -708,6 +741,22 @@ pub enum BackendEvent {
     FileTransferCancelled {
         request_id: OperationId,
         target: DeviceTarget,
+    },
+    FileMutationStarted {
+        request_id: OperationId,
+        kind: RemoteFileMutationKind,
+        target: DeviceTarget,
+        path: RemotePath,
+        destination: Option<RemotePath>,
+    },
+    FileMutationCompleted {
+        request_id: OperationId,
+        summary: RemoteFileMutationSummary,
+    },
+    FileMutationFailed {
+        request_id: OperationId,
+        target: DeviceTarget,
+        error: BridgeError,
     },
 }
 

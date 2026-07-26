@@ -16,6 +16,7 @@ use bridgescope_domain::{
     BridgeError, DeviceCapabilities, DeviceDescriptor, DeviceOverview, DeviceSerial, DeviceState,
     ErrorCode, OverwritePolicy, RemoteFileEntry, RemotePath,
 };
+use tokio_util::sync::CancellationToken;
 
 pub use shell::{ShellOutputChunk, ShellSessionHandle, ShellStream};
 
@@ -107,6 +108,7 @@ pub trait AdbTransport: Send + Sync {
         local_path: &Path,
         remote_path: &RemotePath,
         overwrite: OverwritePolicy,
+        cancellation: CancellationToken,
     ) -> Result<(), BridgeError>;
     async fn pull_file(
         &self,
@@ -114,6 +116,23 @@ pub trait AdbTransport: Send + Sync {
         remote_path: &RemotePath,
         local_path: &Path,
         overwrite: OverwritePolicy,
+        cancellation: CancellationToken,
+    ) -> Result<(), BridgeError>;
+    async fn create_directory(
+        &self,
+        serial: &DeviceSerial,
+        path: &RemotePath,
+    ) -> Result<(), BridgeError>;
+    async fn rename_entry(
+        &self,
+        serial: &DeviceSerial,
+        source: &RemotePath,
+        destination: &RemotePath,
+    ) -> Result<(), BridgeError>;
+    async fn delete_file(
+        &self,
+        serial: &DeviceSerial,
+        path: &RemotePath,
     ) -> Result<(), BridgeError>;
 }
 
@@ -284,8 +303,18 @@ impl AdbTransport for ProcessAdbTransport {
         local_path: &Path,
         remote_path: &RemotePath,
         overwrite: OverwritePolicy,
+        cancellation: CancellationToken,
     ) -> Result<(), BridgeError> {
-        files::push_file(&self.executable, serial, local_path, remote_path, overwrite).await
+        files::push_file(
+            &self.executable,
+            serial,
+            local_path,
+            remote_path,
+            overwrite,
+            cancellation,
+            self.timeout,
+        )
+        .await
     }
 
     async fn pull_file(
@@ -294,8 +323,43 @@ impl AdbTransport for ProcessAdbTransport {
         remote_path: &RemotePath,
         local_path: &Path,
         overwrite: OverwritePolicy,
+        cancellation: CancellationToken,
     ) -> Result<(), BridgeError> {
-        files::pull_file(&self.executable, serial, remote_path, local_path, overwrite).await
+        files::pull_file(
+            &self.executable,
+            serial,
+            remote_path,
+            local_path,
+            overwrite,
+            cancellation,
+            self.timeout,
+        )
+        .await
+    }
+
+    async fn create_directory(
+        &self,
+        serial: &DeviceSerial,
+        path: &RemotePath,
+    ) -> Result<(), BridgeError> {
+        files::create_directory(&self.executable, serial, path, self.timeout).await
+    }
+
+    async fn rename_entry(
+        &self,
+        serial: &DeviceSerial,
+        source: &RemotePath,
+        destination: &RemotePath,
+    ) -> Result<(), BridgeError> {
+        files::rename_entry(&self.executable, serial, source, destination, self.timeout).await
+    }
+
+    async fn delete_file(
+        &self,
+        serial: &DeviceSerial,
+        path: &RemotePath,
+    ) -> Result<(), BridgeError> {
+        files::delete_file(&self.executable, serial, path, self.timeout).await
     }
 }
 

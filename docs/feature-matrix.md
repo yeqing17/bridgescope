@@ -12,7 +12,7 @@ Legend: ✅ implemented, 🚧 active milestone, ⏳ planned, 🧪 experimental.
 | Screenshot | ✅ | ✅ |
 | AI assistant (provider-neutral) | 🚧 reserved surface | ✅ streaming + real provider |
 | Logcat | ⏳ | ✅ |
-| File management | ⏳ | ✅ |
+| File management | 🚧 browser + transfer | ✅ |
 | Application management | ⏳ | ✅ |
 | Process monitor | ⏳ | ✅ |
 | Performance metrics | ⏳ | ✅ |

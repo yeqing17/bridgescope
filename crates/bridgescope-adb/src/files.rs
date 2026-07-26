@@ -1,5 +1,7 @@
 use std::{ffi::OsString, path::Path, time::Duration};
 
+use tokio_util::sync::CancellationToken;
+
 use bridgescope_domain::{
     BridgeError, ErrorCode, OverwritePolicy, RemoteFileEntry, RemoteFileKind, RemotePath,
 };
@@ -55,6 +57,8 @@ pub(crate) async fn push_file(
     local_path: &Path,
     remote_path: &RemotePath,
     overwrite: OverwritePolicy,
+    cancellation: CancellationToken,
+    timeout: Duration,
 ) -> Result<(), BridgeError> {
     let metadata = tokio::fs::metadata(local_path).await.map_err(|error| {
         BridgeError::new(
@@ -83,6 +87,8 @@ pub(crate) async fn push_file(
             OsString::from(remote_path.as_str()),
         ],
         "file.upload_failed",
+        cancellation,
+        timeout,
     )
     .await
 }
@@ -93,6 +99,8 @@ pub(crate) async fn pull_file(
     remote_path: &RemotePath,
     local_path: &Path,
     overwrite: OverwritePolicy,
+    cancellation: CancellationToken,
+    timeout: Duration,
 ) -> Result<(), BridgeError> {
     if let Ok(metadata) = tokio::fs::symlink_metadata(local_path).await {
         if metadata.file_type().is_symlink() {
@@ -120,8 +128,102 @@ pub(crate) async fn pull_file(
             local_path.as_os_str().to_owned(),
         ],
         "file.download_failed",
+        cancellation,
+        timeout,
     )
     .await
+}
+
+pub(crate) async fn create_directory(
+    executable: &Path,
+    serial: &bridgescope_domain::DeviceSerial,
+    path: &RemotePath,
+    timeout: Duration,
+) -> Result<(), BridgeError> {
+    run_remote_mutation(
+        executable,
+        serial,
+        "[ ! -e \"$1\" ] && [ ! -L \"$1\" ] || exit 17; mkdir -- \"$1\"",
+        &[path],
+        timeout,
+        "file.create_directory_failed",
+    )
+    .await
+}
+
+pub(crate) async fn rename_entry(
+    executable: &Path,
+    serial: &bridgescope_domain::DeviceSerial,
+    source: &RemotePath,
+    destination: &RemotePath,
+    timeout: Duration,
+) -> Result<(), BridgeError> {
+    if source.as_str() == "/" || source == destination {
+        return Err(BridgeError::invalid_input("file.rename_invalid"));
+    }
+    run_remote_mutation(
+        executable,
+        serial,
+        "([ -e \"$1\" ] || [ -L \"$1\" ]) || exit 2; ([ ! -e \"$2\" ] && [ ! -L \"$2\" ]) || exit 17; mv -- \"$1\" \"$2\"",
+        &[source, destination],
+        timeout,
+        "file.rename_failed",
+    )
+    .await
+}
+
+pub(crate) async fn delete_file(
+    executable: &Path,
+    serial: &bridgescope_domain::DeviceSerial,
+    path: &RemotePath,
+    timeout: Duration,
+) -> Result<(), BridgeError> {
+    if path.as_str() == "/" {
+        return Err(BridgeError::invalid_input("file.delete_invalid"));
+    }
+    run_remote_mutation(
+        executable,
+        serial,
+        "[ -f \"$1\" ] && [ ! -L \"$1\" ] || exit 22; rm -- \"$1\"",
+        &[path],
+        timeout,
+        "file.delete_failed",
+    )
+    .await
+}
+
+async fn run_remote_mutation(
+    executable: &Path,
+    serial: &bridgescope_domain::DeviceSerial,
+    script: &str,
+    paths: &[&RemotePath],
+    timeout: Duration,
+    message_key: &'static str,
+) -> Result<(), BridgeError> {
+    let mut arguments = vec![
+        OsString::from("-s"),
+        OsString::from(serial.as_str()),
+        OsString::from("shell"),
+        OsString::from("sh"),
+        OsString::from("-c"),
+        OsString::from(script),
+        OsString::from("bridgescope-files"),
+    ];
+    arguments.extend(paths.iter().map(|path| OsString::from(path.as_str())));
+    let output = process::run_bounded(executable, arguments, timeout, 4096, STDERR_LIMIT).await?;
+    if output.exit_code == Some(0) {
+        return Ok(());
+    }
+    let error = match output.exit_code {
+        Some(17) => BridgeError::new(
+            ErrorCode::AlreadyExists,
+            "file.remote_exists",
+            "destination already exists",
+        ),
+        Some(22) => BridgeError::invalid_input("file.delete_not_regular_file"),
+        _ => map_command_error(&output.stderr, message_key),
+    };
+    Err(error)
 }
 
 async fn remote_exists(
@@ -153,13 +255,16 @@ async fn run_transfer(
     executable: &Path,
     arguments: Vec<OsString>,
     message_key: &'static str,
+    cancellation: CancellationToken,
+    timeout: Duration,
 ) -> Result<(), BridgeError> {
-    let output = process::run_bounded(
+    let output = process::run_bounded_cancellable(
         executable,
         arguments,
-        TRANSFER_TIMEOUT,
+        TRANSFER_TIMEOUT.max(timeout),
         64 * 1024,
         STDERR_LIMIT,
+        cancellation,
     )
     .await?;
     if output.exit_code == Some(0) {

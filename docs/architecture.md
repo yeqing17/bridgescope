@@ -23,6 +23,6 @@ backend runtime (Tokio)
 6. UI state, persisted preferences, and device-session state are separate types.
 7. Unsupported device capabilities are represented explicitly rather than as invented zero values.
 
-## 0.1 runtime
+## 0.4 runtime
 
-The current version uses controlled `adb` child process adapters. It polls `adb devices -l`, reconciles snapshots in `DeviceRegistry`, retrieves overview fields through fixed read-only commands, starts an interactive `adb shell -tt`, and captures screenshots through binary-safe `exec-out screencap -p`. Shell and screenshot requests carry device generation plus session/request IDs so stale output is rejected. Native ADB host, shell-v2 resize, sync, forward, and reverse protocols will replace subprocess-dependent paths incrementally.
+The current version uses controlled `adb` child process adapters. It polls `adb devices -l`, reconciles snapshots in `DeviceRegistry`, retrieves overview fields through fixed read-only commands, starts an interactive `adb shell -tt`, captures screenshots through binary-safe `exec-out screencap -p`, and browses/manages remote files. File transfers run in cancellable backend tasks so the command loop remains responsive; cancellation tokens terminate bounded ADB children and every operation is bound to a device generation and request ID. File mutations use positional shell parameters, backend-enforced overwrite/deletion checks, and refresh the affected directory after completion. Native ADB host, shell-v2 resize, sync, forward, and reverse protocols will replace subprocess-dependent paths incrementally.

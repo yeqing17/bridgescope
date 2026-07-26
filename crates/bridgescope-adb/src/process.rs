@@ -4,8 +4,9 @@ use bridgescope_domain::{BridgeError, ErrorCode};
 use tokio::{
     io::{AsyncRead, AsyncReadExt},
     process::Command,
-    time::timeout,
+    time::sleep,
 };
+use tokio_util::sync::CancellationToken;
 
 pub(crate) struct ProcessOutput {
     pub stdout: Vec<u8>,
@@ -19,6 +20,25 @@ pub(crate) async fn run_bounded(
     command_timeout: Duration,
     stdout_limit: usize,
     stderr_limit: usize,
+) -> Result<ProcessOutput, BridgeError> {
+    run_bounded_cancellable(
+        executable,
+        arguments,
+        command_timeout,
+        stdout_limit,
+        stderr_limit,
+        CancellationToken::new(),
+    )
+    .await
+}
+
+pub(crate) async fn run_bounded_cancellable(
+    executable: &Path,
+    arguments: Vec<OsString>,
+    command_timeout: Duration,
+    stdout_limit: usize,
+    stderr_limit: usize,
+    cancellation: CancellationToken,
 ) -> Result<ProcessOutput, BridgeError> {
     let mut child = Command::new(executable)
         .args(arguments)
@@ -45,29 +65,45 @@ pub(crate) async fn run_bounded(
             "stderr pipe missing",
         )
     })?;
+    let stdout_task = tokio::spawn(read_limited(stdout, stdout_limit));
+    let stderr_task = tokio::spawn(read_limited(stderr, stderr_limit));
 
-    let operation = async {
-        let stdout_task = tokio::spawn(read_limited(stdout, stdout_limit));
-        let stderr_task = tokio::spawn(read_limited(stderr, stderr_limit));
-        let status = child.wait().await.map_err(|error| {
+    let status = tokio::select! {
+        result = child.wait() => result.map_err(|error| {
             BridgeError::new(ErrorCode::AdbFailed, "adb.wait_failed", error.to_string())
-        })?;
-        let stdout = stdout_task.await.map_err(|error| join_error(&error))??;
-        let stderr = stderr_task.await.map_err(|error| join_error(&error))??;
-        Ok(ProcessOutput {
-            stdout,
-            stderr,
-            exit_code: status.code(),
-        })
-    };
-
-    timeout(command_timeout, operation).await.map_err(|_| {
-        BridgeError::new(
+        }),
+        () = sleep(command_timeout) => Err(BridgeError::new(
             ErrorCode::TimedOut,
             "adb.timed_out",
             "adb command timed out",
-        )
-    })?
+        )),
+        () = cancellation.cancelled() => Err(BridgeError::new(
+            ErrorCode::Cancelled,
+            "adb.cancelled",
+            "adb command cancelled",
+        )),
+    };
+
+    match status {
+        Ok(status) => {
+            let stdout = stdout_task.await.map_err(|error| join_error(&error))??;
+            let stderr = stderr_task.await.map_err(|error| join_error(&error))??;
+            Ok(ProcessOutput {
+                stdout,
+                stderr,
+                exit_code: status.code(),
+            })
+        }
+        Err(error) => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            stdout_task.abort();
+            stderr_task.abort();
+            let _ = stdout_task.await;
+            let _ = stderr_task.await;
+            Err(error)
+        }
+    }
 }
 
 async fn read_limited<R>(mut reader: R, limit: usize) -> Result<Vec<u8>, BridgeError>
