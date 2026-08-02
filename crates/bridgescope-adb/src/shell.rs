@@ -312,12 +312,11 @@ mod tests {
         }
 
         let first = receiver.try_recv().expect("first input chunk");
+        let batch_chunk_count =
+            u8::try_from(MAX_INPUT_BATCH_CHUNKS).expect("test batch capacity fits in a byte");
         assert_eq!(
             collect_input_batch(first, &mut receiver),
-            (0_u8..MAX_INPUT_BATCH_CHUNKS as u8)
-                .map(|byte| vec![byte])
-                .flatten()
-                .collect::<Vec<_>>()
+            (0_u8..batch_chunk_count).collect::<Vec<_>>()
         );
         assert_eq!(receiver.try_recv().expect("later chunk remains"), vec![16]);
     }

@@ -377,7 +377,7 @@ async fn collect_shell_output_batch(
         match tokio::time::timeout_at(deadline, output.recv()).await {
             Ok(Some(chunk)) => bytes.extend_from_slice(&chunk.bytes),
             Ok(None) | Err(_) => break,
-        };
+        }
     }
     bytes
 }
