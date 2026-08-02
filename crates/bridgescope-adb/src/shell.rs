@@ -220,10 +220,7 @@ where
 /// `ChildStdin` is not buffered, so `write_all` makes the bytes available to
 /// adb immediately. Combining a small bounded burst avoids one runtime wakeup
 /// and pipe write per key when egui delivers multiple input events in a frame.
-fn collect_input_batch(
-    mut input: Vec<u8>,
-    input_rx: &mut mpsc::Receiver<Vec<u8>>,
-) -> Vec<u8> {
+fn collect_input_batch(mut input: Vec<u8>, input_rx: &mut mpsc::Receiver<Vec<u8>>) -> Vec<u8> {
     for _ in 1..MAX_INPUT_BATCH_CHUNKS {
         match input_rx.try_recv() {
             Ok(next) => input.extend_from_slice(&next),
