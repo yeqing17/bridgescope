@@ -1,4 +1,11 @@
-use std::{collections::HashMap, io::Cursor, path::PathBuf, sync::Arc, thread, time::Duration};
+use std::{
+    collections::HashMap,
+    io::Cursor,
+    path::PathBuf,
+    sync::{Arc, RwLock},
+    thread,
+    time::Duration,
+};
 
 use bridgescope_adb::{AdbLocator, AdbTransport, ProcessAdbTransport, ShellSessionHandle};
 use bridgescope_device::DeviceRegistry;
@@ -15,18 +22,26 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 const CHANNEL_CAPACITY: usize = 64;
+const MAX_SHELL_OUTPUT_BATCH_CHUNKS: usize = 8;
+const SHELL_OUTPUT_COALESCE_WINDOW: Duration = Duration::from_millis(8);
 const REFRESH_INTERVAL: Duration = Duration::from_secs(3);
 const MAX_SCREENSHOT_DIMENSION: u32 = 8192;
 const MAX_SCREENSHOT_PIXELS: u64 = 16_777_216;
 
 struct ActiveShell {
-    input: mpsc::Sender<Vec<u8>>,
     handle: ShellSessionHandle,
 }
 
 struct ActiveTransfer {
     target: DeviceTarget,
     cancellation: CancellationToken,
+}
+
+#[derive(Clone)]
+struct ShellEventContext {
+    events: mpsc::Sender<BackendEvent>,
+    context: egui::Context,
+    inputs: Arc<RwLock<HashMap<ShellSessionId, mpsc::Sender<Vec<u8>>>>>,
 }
 
 enum FileTaskResult {
@@ -44,6 +59,7 @@ enum FileTaskResult {
 
 pub struct RuntimeBridge {
     command_tx: mpsc::Sender<BackendCommand>,
+    shell_inputs: Arc<RwLock<HashMap<ShellSessionId, mpsc::Sender<Vec<u8>>>>>,
     event_rx: mpsc::Receiver<BackendEvent>,
     context: egui::Context,
 }
@@ -52,8 +68,10 @@ impl RuntimeBridge {
     pub fn spawn(context: egui::Context) -> Self {
         let (command_tx, command_rx) = mpsc::channel(CHANNEL_CAPACITY);
         let (event_tx, event_rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let shell_inputs = Arc::new(RwLock::new(HashMap::new()));
 
         let backend_context = context.clone();
+        let backend_shell_inputs = Arc::clone(&shell_inputs);
         thread::Builder::new()
             .name("bridgescope-backend".to_owned())
             .spawn(move || {
@@ -62,18 +80,48 @@ impl RuntimeBridge {
                     .enable_all()
                     .build()
                     .expect("Tokio runtime must initialize");
-                runtime.block_on(run_backend(command_rx, event_tx, backend_context));
+                runtime.block_on(run_backend(
+                    command_rx,
+                    event_tx,
+                    backend_context,
+                    backend_shell_inputs,
+                ));
             })
             .expect("backend thread must start");
 
         Self {
             command_tx,
+            shell_inputs,
             event_rx,
             context,
         }
     }
 
     pub fn try_send(&self, command: BackendCommand) -> Result<(), BridgeError> {
+        if let BackendCommand::WriteShell { session_id, input } = command {
+            let inputs = self.shell_inputs.read().map_err(|error| {
+                BridgeError::new(
+                    ErrorCode::Internal,
+                    "runtime.shell_registry_unavailable",
+                    error.to_string(),
+                )
+            })?;
+            let input_tx = inputs.get(&session_id).ok_or_else(|| {
+                BridgeError::new(
+                    ErrorCode::InvalidInput,
+                    "shell.session_not_found",
+                    session_id.to_string(),
+                )
+            })?;
+            return input_tx.try_send(input.into_bytes()).map_err(|error| {
+                BridgeError::new(
+                    ErrorCode::OutputLimit,
+                    "shell.input_queue_full",
+                    error.to_string(),
+                )
+            });
+        }
+
         self.command_tx.try_send(command).map_err(|error| {
             BridgeError::new(
                 ErrorCode::Internal,
@@ -101,12 +149,18 @@ async fn run_backend(
     mut commands: mpsc::Receiver<BackendCommand>,
     events: mpsc::Sender<BackendEvent>,
     context: egui::Context,
+    shell_inputs: Arc<RwLock<HashMap<ShellSessionId, mpsc::Sender<Vec<u8>>>>>,
 ) {
     let transport = initialize_transport(&events, &context).await;
     let ai_provider = initialize_ai(&events, &context).await;
     let mut registry = DeviceRegistry::default();
     let mut shells = HashMap::<ShellSessionId, ActiveShell>::new();
     let mut transfers = HashMap::<OperationId, ActiveTransfer>::new();
+    let shell_event_context = ShellEventContext {
+        events: events.clone(),
+        context: context.clone(),
+        inputs: shell_inputs,
+    };
     let (file_result_tx, mut file_result_rx) = mpsc::channel(CHANNEL_CAPACITY);
     let mut interval = tokio::time::interval(REFRESH_INTERVAL);
     interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -151,28 +205,24 @@ async fn run_backend(
                             &mut shells,
                             target,
                             session_id,
-                            events.clone(),
-                            context.clone(),
+                            shell_event_context.clone(),
                         ).await;
                     }
-                    BackendCommand::WriteShell { session_id, input } => {
-                        if let Some(shell) = shells.get(&session_id)
-                            && shell.input.try_send(input.into_bytes()).is_err()
-                        {
-                            send_event(&events, &context, BackendEvent::ShellFailed {
-                                session_id,
-                                error: BridgeError::new(
-                                    ErrorCode::OutputLimit,
-                                    "shell.input_queue_full",
-                                    "shell input queue is full",
-                                ),
-                            }).await;
-                        }
+                    BackendCommand::WriteShell { session_id, .. } => {
+                        send_event(&events, &context, BackendEvent::ShellFailed {
+                            session_id,
+                            error: BridgeError::new(
+                                ErrorCode::Internal,
+                                "shell.input_routing_failed",
+                                "shell input reached the control queue",
+                            ),
+                        }).await;
                     }
                     BackendCommand::ResizeShell { session_id: _, size: _ } => {
                         // Native shell-v2 resize is a later transport milestone.
                     }
                     BackendCommand::CloseShell(session_id) => {
+                        remove_shell_input(&shell_event_context.inputs, session_id);
                         if let Some(shell) = shells.remove(&session_id) {
                             tokio::spawn(async move { let _result = shell.handle.close().await; });
                         }
@@ -232,13 +282,12 @@ async fn open_shell(
     shells: &mut HashMap<ShellSessionId, ActiveShell>,
     target: DeviceTarget,
     session_id: ShellSessionId,
-    events: mpsc::Sender<BackendEvent>,
-    context: egui::Context,
+    shell_event_context: ShellEventContext,
 ) {
     if registry.current_online(&target).is_none() {
         send_event(
-            &events,
-            &context,
+            &shell_event_context.events,
+            &shell_event_context.context,
             BackendEvent::ShellFailed {
                 session_id,
                 error: BridgeError::new(
@@ -254,21 +303,22 @@ async fn open_shell(
     match transport.start_shell(&target.serial).await {
         Ok(mut handle) => {
             let input = handle.input();
+            insert_shell_input(&shell_event_context.inputs, session_id, input);
             let mut output = std::mem::replace(handle.output_mut(), mpsc::channel(1).1);
-            let output_events = events.clone();
-            let output_context = context.clone();
+            let output_events = shell_event_context.events.clone();
+            let output_context = shell_event_context.context.clone();
+            let output_shell_inputs = Arc::clone(&shell_event_context.inputs);
             tokio::spawn(async move {
                 while let Some(chunk) = output.recv().await {
+                    let bytes = collect_shell_output_batch(chunk.bytes, &mut output).await;
                     send_event(
                         &output_events,
                         &output_context,
-                        BackendEvent::ShellOutput {
-                            session_id,
-                            bytes: chunk.bytes,
-                        },
+                        BackendEvent::ShellOutput { session_id, bytes },
                     )
                     .await;
                 }
+                remove_shell_input(&output_shell_inputs, session_id);
                 send_event(
                     &output_events,
                     &output_context,
@@ -279,23 +329,57 @@ async fn open_shell(
                 )
                 .await;
             });
-            shells.insert(session_id, ActiveShell { input, handle });
+            shells.insert(session_id, ActiveShell { handle });
             send_event(
-                &events,
-                &context,
+                &shell_event_context.events,
+                &shell_event_context.context,
                 BackendEvent::ShellOpened { target, session_id },
             )
             .await;
         }
         Err(error) => {
             send_event(
-                &events,
-                &context,
+                &shell_event_context.events,
+                &shell_event_context.context,
                 BackendEvent::ShellFailed { session_id, error },
             )
             .await;
         }
     }
+}
+
+fn insert_shell_input(
+    shell_inputs: &RwLock<HashMap<ShellSessionId, mpsc::Sender<Vec<u8>>>>,
+    session_id: ShellSessionId,
+    input: mpsc::Sender<Vec<u8>>,
+) {
+    if let Ok(mut inputs) = shell_inputs.write() {
+        inputs.insert(session_id, input);
+    }
+}
+
+fn remove_shell_input(
+    shell_inputs: &RwLock<HashMap<ShellSessionId, mpsc::Sender<Vec<u8>>>>,
+    session_id: ShellSessionId,
+) {
+    if let Ok(mut inputs) = shell_inputs.write() {
+        inputs.remove(&session_id);
+    }
+}
+
+async fn collect_shell_output_batch(
+    first: Vec<u8>,
+    output: &mut mpsc::Receiver<bridgescope_adb::ShellOutputChunk>,
+) -> Vec<u8> {
+    let mut bytes = first;
+    let deadline = tokio::time::Instant::now() + SHELL_OUTPUT_COALESCE_WINDOW;
+    for _ in 1..MAX_SHELL_OUTPUT_BATCH_CHUNKS {
+        match tokio::time::timeout_at(deadline, output.recv()).await {
+            Ok(Some(chunk)) => bytes.extend_from_slice(&chunk.bytes),
+            Ok(None) | Err(_) => break,
+        };
+    }
+    bytes
 }
 
 async fn capture_screenshot(

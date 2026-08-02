@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 const CHUNK_BYTES: usize = 8192;
 const CHANNEL_CAPACITY: usize = 128;
+const MAX_INPUT_BATCH_CHUNKS: usize = 16;
 const CLOSE_GRACE: Duration = Duration::from_millis(750);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -170,11 +171,9 @@ where
             () = cancellation.cancelled() => break,
             input = input_rx.recv() => {
                 let Some(input) = input else { break };
+                let input = collect_input_batch(input, &mut input_rx);
                 stdin.write_all(&input).await.map_err(|error| {
                     BridgeError::new(ErrorCode::AdbFailed, "shell.write_failed", error.to_string())
-                })?;
-                stdin.flush().await.map_err(|error| {
-                    BridgeError::new(ErrorCode::AdbFailed, "shell.flush_failed", error.to_string())
                 })?;
             }
             status = child.wait() => {
@@ -214,6 +213,26 @@ where
     finish_reader(stdout_task).await?;
     finish_reader(stderr_task).await?;
     Ok(status.code())
+}
+
+/// Coalesce already-queued keystrokes before writing to the OS pipe.
+///
+/// `ChildStdin` is not buffered, so `write_all` makes the bytes available to
+/// adb immediately. Combining a small bounded burst avoids one runtime wakeup
+/// and pipe write per key when egui delivers multiple input events in a frame.
+fn collect_input_batch(
+    mut input: Vec<u8>,
+    input_rx: &mut mpsc::Receiver<Vec<u8>>,
+) -> Vec<u8> {
+    for _ in 1..MAX_INPUT_BATCH_CHUNKS {
+        match input_rx.try_recv() {
+            Ok(next) => input.extend_from_slice(&next),
+            Err(mpsc::error::TryRecvError::Empty | mpsc::error::TryRecvError::Disconnected) => {
+                break;
+            }
+        }
+    }
+    input
 }
 
 async fn forward_output<R>(
@@ -286,5 +305,23 @@ mod tests {
                 .map(OsString::from)
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn input_batch_preserves_order_and_leaves_later_chunks_queued() {
+        let (sender, mut receiver) = mpsc::channel(20);
+        for byte in 0_u8..20 {
+            sender.try_send(vec![byte]).expect("queue has capacity");
+        }
+
+        let first = receiver.try_recv().expect("first input chunk");
+        assert_eq!(
+            collect_input_batch(first, &mut receiver),
+            (0_u8..MAX_INPUT_BATCH_CHUNKS as u8)
+                .map(|byte| vec![byte])
+                .flatten()
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(receiver.try_recv().expect("later chunk remains"), vec![16]);
     }
 }

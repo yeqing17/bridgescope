@@ -1,6 +1,6 @@
 use bridgescope_domain::{
-    BackendCommand, BackendEvent, BridgeError, DeviceRecord, DeviceTarget, ShellInput,
-    ShellSessionId, ShellSize,
+    BackendCommand, BackendEvent, BridgeError, DeviceRecord, DeviceTarget, MAX_SHELL_INPUT_BYTES,
+    ShellInput, ShellSessionId, ShellSize,
 };
 use eframe::egui::{self, Color32};
 
@@ -218,20 +218,20 @@ fn terminal_input(ui: &egui::Ui, screen: &vt100::Screen) -> Vec<Vec<u8>> {
     let mut output = Vec::new();
     for event in ui.input(|input| input.events.clone()) {
         match event {
-            egui::Event::Text(text) if !text.is_empty() => output.push(text.into_bytes()),
-            egui::Event::Paste(text) if !text.is_empty() => {
-                let mut bytes = Vec::new();
-                if screen.bracketed_paste() {
-                    bytes.extend_from_slice(b"\x1b[200~");
-                }
-                bytes.extend_from_slice(text.as_bytes());
-                if screen.bracketed_paste() {
-                    bytes.extend_from_slice(b"\x1b[201~");
-                }
-                output.push(bytes);
+            egui::Event::Text(text) if !text.is_empty() => {
+                append_terminal_input(&mut output, text.as_bytes());
             }
-            egui::Event::Copy => output.push(vec![3]),
-            egui::Event::Cut => output.push(vec![24]),
+            egui::Event::Paste(text) if !text.is_empty() => {
+                if screen.bracketed_paste() {
+                    append_terminal_input(&mut output, b"\x1b[200~");
+                }
+                append_terminal_input(&mut output, text.as_bytes());
+                if screen.bracketed_paste() {
+                    append_terminal_input(&mut output, b"\x1b[201~");
+                }
+            }
+            egui::Event::Copy => append_terminal_input(&mut output, &[3]),
+            egui::Event::Cut => append_terminal_input(&mut output, &[24]),
             egui::Event::Key {
                 key,
                 pressed: true,
@@ -239,13 +239,30 @@ fn terminal_input(ui: &egui::Ui, screen: &vt100::Screen) -> Vec<Vec<u8>> {
                 ..
             } => {
                 if let Some(bytes) = key_bytes(key, modifiers, screen.application_cursor()) {
-                    output.push(bytes);
+                    append_terminal_input(&mut output, &bytes);
                 }
             }
             _ => {}
         }
     }
     output
+}
+
+fn append_terminal_input(output: &mut Vec<Vec<u8>>, mut bytes: &[u8]) {
+    while !bytes.is_empty() {
+        if output
+            .last()
+            .is_none_or(|chunk| chunk.len() == MAX_SHELL_INPUT_BYTES)
+        {
+            output.push(Vec::with_capacity(bytes.len().min(MAX_SHELL_INPUT_BYTES)));
+        }
+        let chunk = output.last_mut().expect("input chunk exists");
+        let count = bytes
+            .len()
+            .min(MAX_SHELL_INPUT_BYTES.saturating_sub(chunk.len()));
+        chunk.extend_from_slice(&bytes[..count]);
+        bytes = &bytes[count..];
+    }
 }
 
 fn key_bytes(
@@ -398,6 +415,24 @@ mod tests {
             key_bytes(egui::Key::ArrowUp, egui::Modifiers::NONE, true),
             Some(b"\x1bOA".to_vec())
         );
+    }
+
+    #[test]
+    fn terminal_input_batches_and_preserves_order() {
+        let mut output = Vec::new();
+        append_terminal_input(&mut output, b"hello");
+        append_terminal_input(&mut output, b"\r");
+        assert_eq!(output, [b"hello\r".to_vec()]);
+    }
+
+    #[test]
+    fn terminal_input_splits_at_domain_limit() {
+        let input = vec![b'x'; MAX_SHELL_INPUT_BYTES + 7];
+        let mut output = Vec::new();
+        append_terminal_input(&mut output, &input);
+        assert_eq!(output.len(), 2);
+        assert_eq!(output[0].len(), MAX_SHELL_INPUT_BYTES);
+        assert_eq!(output[1], vec![b'x'; 7]);
     }
 
     #[test]
