@@ -9,6 +9,7 @@ const TERMINAL_COLUMNS: u16 = 80;
 const SCROLLBACK_ROWS: usize = 10_000;
 const TERMINAL_FONT_SIZE: f32 = 14.0;
 const TERMINAL_PADDING: f32 = 10.0;
+const TERMINAL_CURSOR_VERTICAL_OFFSET: f32 = 1.0;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ShellStatus {
@@ -218,11 +219,11 @@ pub fn show(
 
 fn terminal_input(ui: &egui::Ui, screen: &vt100::Screen) -> Vec<Vec<u8>> {
     let mut output = Vec::new();
-    for event in ui.input(|input| input.events.clone()) {
+    let events = ui.input(|input| input.events.clone());
+    let text_supplies_enter = events.iter().any(event_has_line_ending);
+    for event in events {
         match event {
             egui::Event::Text(text) if !text.is_empty() => {
-                // egui also reports control keys such as Enter as Key events.
-                // Forwarding their text representation would submit it twice.
                 append_text_input(&mut output, &text);
             }
             egui::Event::Paste(text) if !text.is_empty() => {
@@ -242,6 +243,9 @@ fn terminal_input(ui: &egui::Ui, screen: &vt100::Screen) -> Vec<Vec<u8>> {
                 modifiers,
                 ..
             } => {
+                if key == egui::Key::Enter && text_supplies_enter {
+                    continue;
+                }
                 if let Some(bytes) = key_bytes(key, modifiers, screen.application_cursor()) {
                     append_terminal_input(&mut output, &bytes);
                 }
@@ -252,13 +256,34 @@ fn terminal_input(ui: &egui::Ui, screen: &vt100::Screen) -> Vec<Vec<u8>> {
     output
 }
 
+fn event_has_line_ending(event: &egui::Event) -> bool {
+    matches!(event, egui::Event::Text(text) if text.contains(['\r', '\n']))
+}
+
 fn append_text_input(output: &mut Vec<Vec<u8>>, text: &str) {
-    let bytes = text
-        .bytes()
-        .filter(|byte| !byte.is_ascii_control())
-        .collect::<Vec<_>>();
-    if !bytes.is_empty() {
-        append_terminal_input(output, &bytes);
+    let mut printable = String::new();
+    let mut previous_was_line_ending = false;
+    for character in text.chars() {
+        match character {
+            '\r' | '\n' => {
+                if !previous_was_line_ending {
+                    if !printable.is_empty() {
+                        append_terminal_input(output, printable.as_bytes());
+                        printable.clear();
+                    }
+                    append_terminal_input(output, b"\n");
+                }
+                previous_was_line_ending = true;
+            }
+            _ if character.is_control() => {}
+            _ => {
+                printable.push(character);
+                previous_was_line_ending = false;
+            }
+        }
+    }
+    if !printable.is_empty() {
+        append_terminal_input(output, printable.as_bytes());
     }
 }
 
@@ -285,7 +310,7 @@ fn key_bytes(
     application_cursor: bool,
 ) -> Option<Vec<u8>> {
     let fixed: Option<&[u8]> = match key {
-        egui::Key::Enter => Some(b"\r"),
+        egui::Key::Enter => Some(b"\n"),
         egui::Key::Tab => Some(b"\t"),
         egui::Key::Backspace => Some(b"\x7f"),
         egui::Key::Escape => Some(b"\x1b"),
@@ -397,13 +422,16 @@ fn paint_terminal(ui: &egui::Ui, rect: egui::Rect, screen: &vt100::Screen, focus
         let (row, column) = screen.cursor_position();
         let (cell_width, cell_height) =
             ui.fonts_mut(|fonts| (fonts.glyph_width(&font_id, 'W'), fonts.row_height(&font_id)));
+        let cursor_height = (cell_height - TERMINAL_CURSOR_VERTICAL_OFFSET).max(1.0);
         let position = rect.left_top()
             + egui::vec2(
                 TERMINAL_PADDING + f32::from(column) * cell_width,
-                TERMINAL_PADDING + f32::from(row) * cell_height,
+                TERMINAL_PADDING
+                    + f32::from(row) * cell_height
+                    + TERMINAL_CURSOR_VERTICAL_OFFSET,
             );
         ui.painter().rect_filled(
-            egui::Rect::from_min_size(position, egui::vec2(cell_width, cell_height)),
+            egui::Rect::from_min_size(position, egui::vec2(cell_width, cursor_height)),
             0.0,
             Color32::from_white_alpha(80),
         );
@@ -435,6 +463,10 @@ mod tests {
             key_bytes(egui::Key::ArrowUp, egui::Modifiers::NONE, true),
             Some(b"\x1bOA".to_vec())
         );
+        assert_eq!(
+            key_bytes(egui::Key::Enter, egui::Modifiers::NONE, false),
+            Some(b"\n".to_vec())
+        );
     }
 
     #[test]
@@ -446,12 +478,17 @@ mod tests {
     }
 
     #[test]
-    fn text_input_ignores_control_characters_handled_as_keys() {
+    fn text_input_normalizes_crlf_to_one_line_ending() {
         let mut output = Vec::new();
         append_text_input(&mut output, "echo ready\r\n");
-        append_terminal_input(&mut output, b"\r");
 
-        assert_eq!(output, [b"echo ready\r".to_vec()]);
+        assert_eq!(output, [b"echo ready\n".to_vec()]);
+    }
+
+    #[test]
+    fn only_text_events_with_line_endings_suppress_enter_key_events() {
+        assert!(event_has_line_ending(&egui::Event::Text("\r".to_owned())));
+        assert!(!event_has_line_ending(&egui::Event::Text("echo ready".to_owned())));
     }
 
     #[test]
