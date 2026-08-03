@@ -395,12 +395,8 @@ fn paint_terminal(ui: &egui::Ui, rect: egui::Rect, screen: &vt100::Screen, focus
     );
     if !screen.hide_cursor() && focused {
         let (row, column) = screen.cursor_position();
-        let (cell_width, cell_height) = ui.fonts_mut(|fonts| {
-            (
-                fonts.glyph_width(&font_id, 'W'),
-                fonts.row_height(&font_id),
-            )
-        });
+        let (cell_width, cell_height) =
+            ui.fonts_mut(|fonts| (fonts.glyph_width(&font_id, 'W'), fonts.row_height(&font_id)));
         let position = rect.left_top()
             + egui::vec2(
                 TERMINAL_PADDING + f32::from(column) * cell_width,
