@@ -7,6 +7,8 @@ use eframe::egui::{self, Color32};
 const TERMINAL_ROWS: u16 = 24;
 const TERMINAL_COLUMNS: u16 = 80;
 const SCROLLBACK_ROWS: usize = 10_000;
+const TERMINAL_FONT_SIZE: f32 = 14.0;
+const TERMINAL_PADDING: f32 = 10.0;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ShellStatus {
@@ -219,7 +221,9 @@ fn terminal_input(ui: &egui::Ui, screen: &vt100::Screen) -> Vec<Vec<u8>> {
     for event in ui.input(|input| input.events.clone()) {
         match event {
             egui::Event::Text(text) if !text.is_empty() => {
-                append_terminal_input(&mut output, text.as_bytes());
+                // egui also reports control keys such as Enter as Key events.
+                // Forwarding their text representation would submit it twice.
+                append_text_input(&mut output, &text);
             }
             egui::Event::Paste(text) if !text.is_empty() => {
                 if screen.bracketed_paste() {
@@ -246,6 +250,16 @@ fn terminal_input(ui: &egui::Ui, screen: &vt100::Screen) -> Vec<Vec<u8>> {
         }
     }
     output
+}
+
+fn append_text_input(output: &mut Vec<Vec<u8>>, text: &str) {
+    let bytes = text
+        .bytes()
+        .filter(|byte| !byte.is_ascii_control())
+        .collect::<Vec<_>>();
+    if !bytes.is_empty() {
+        append_terminal_input(output, &bytes);
+    }
 }
 
 fn append_terminal_input(output: &mut Vec<Vec<u8>>, mut bytes: &[u8]) {
@@ -371,19 +385,29 @@ fn paint_terminal(ui: &egui::Ui, rect: egui::Rect, screen: &vt100::Screen, focus
     } else {
         contents
     };
+    let font_id = egui::FontId::monospace(TERMINAL_FONT_SIZE);
     ui.painter().text(
-        rect.left_top() + egui::vec2(10.0, 10.0),
+        rect.left_top() + egui::vec2(TERMINAL_PADDING, TERMINAL_PADDING),
         egui::Align2::LEFT_TOP,
         text,
-        egui::FontId::monospace(14.0),
+        font_id.clone(),
         Color32::from_rgb(220, 226, 235),
     );
     if !screen.hide_cursor() && focused {
         let (row, column) = screen.cursor_position();
+        let (cell_width, cell_height) = ui.fonts_mut(|fonts| {
+            (
+                fonts.glyph_width(&font_id, 'W'),
+                fonts.row_height(&font_id),
+            )
+        });
         let position = rect.left_top()
-            + egui::vec2(10.0 + f32::from(column) * 8.4, 10.0 + f32::from(row) * 16.0);
+            + egui::vec2(
+                TERMINAL_PADDING + f32::from(column) * cell_width,
+                TERMINAL_PADDING + f32::from(row) * cell_height,
+            );
         ui.painter().rect_filled(
-            egui::Rect::from_min_size(position, egui::vec2(8.0, 16.0)),
+            egui::Rect::from_min_size(position, egui::vec2(cell_width, cell_height)),
             0.0,
             Color32::from_white_alpha(80),
         );
@@ -423,6 +447,15 @@ mod tests {
         append_terminal_input(&mut output, b"hello");
         append_terminal_input(&mut output, b"\r");
         assert_eq!(output, [b"hello\r".to_vec()]);
+    }
+
+    #[test]
+    fn text_input_ignores_control_characters_handled_as_keys() {
+        let mut output = Vec::new();
+        append_text_input(&mut output, "echo ready\r\n");
+        append_terminal_input(&mut output, b"\r");
+
+        assert_eq!(output, [b"echo ready\r".to_vec()]);
     }
 
     #[test]
