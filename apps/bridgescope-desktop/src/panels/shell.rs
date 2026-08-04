@@ -35,11 +35,7 @@ pub struct ShellPanelState {
 impl Default for ShellPanelState {
     fn default() -> Self {
         Self {
-            parser: vt100::Parser::new(
-                REMOTE_TERMINAL_ROWS,
-                TERMINAL_COLUMNS,
-                SCROLLBACK_ROWS,
-            ),
+            parser: vt100::Parser::new(REMOTE_TERMINAL_ROWS, TERMINAL_COLUMNS, SCROLLBACK_ROWS),
             viewport_rows: REMOTE_TERMINAL_ROWS,
             target: None,
             session_id: None,
@@ -127,11 +123,7 @@ impl ShellPanelState {
     }
 
     fn clear_display(&mut self) {
-        self.parser = vt100::Parser::new(
-            self.viewport_rows,
-            TERMINAL_COLUMNS,
-            SCROLLBACK_ROWS,
-        );
+        self.parser = vt100::Parser::new(self.viewport_rows, TERMINAL_COLUMNS, SCROLLBACK_ROWS);
     }
 
     fn resize_viewport(&mut self, rows: u16) {
