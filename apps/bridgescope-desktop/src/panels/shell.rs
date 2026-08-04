@@ -128,7 +128,7 @@ impl ShellPanelState {
 
     fn resize_viewport(&mut self, rows: u16) {
         if self.viewport_rows != rows {
-            self.parser.set_size(rows, TERMINAL_COLUMNS);
+            self.parser.screen_mut().set_size(rows, TERMINAL_COLUMNS);
             self.viewport_rows = rows;
         }
     }
