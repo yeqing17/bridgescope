@@ -426,9 +426,7 @@ fn paint_terminal(ui: &egui::Ui, rect: egui::Rect, screen: &vt100::Screen, focus
         let position = rect.left_top()
             + egui::vec2(
                 TERMINAL_PADDING + f32::from(column) * cell_width,
-                TERMINAL_PADDING
-                    + f32::from(row) * cell_height
-                    + TERMINAL_CURSOR_VERTICAL_OFFSET,
+                TERMINAL_PADDING + f32::from(row) * cell_height + TERMINAL_CURSOR_VERTICAL_OFFSET,
             );
         ui.painter().rect_filled(
             egui::Rect::from_min_size(position, egui::vec2(cell_width, cursor_height)),
@@ -488,7 +486,9 @@ mod tests {
     #[test]
     fn only_text_events_with_line_endings_suppress_enter_key_events() {
         assert!(event_has_line_ending(&egui::Event::Text("\r".to_owned())));
-        assert!(!event_has_line_ending(&egui::Event::Text("echo ready".to_owned())));
+        assert!(!event_has_line_ending(&egui::Event::Text(
+            "echo ready".to_owned()
+        )));
     }
 
     #[test]
