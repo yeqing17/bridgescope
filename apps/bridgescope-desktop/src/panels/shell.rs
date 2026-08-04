@@ -4,12 +4,13 @@ use bridgescope_domain::{
 };
 use eframe::egui::{self, Color32};
 
-const TERMINAL_ROWS: u16 = 24;
+const REMOTE_TERMINAL_ROWS: u16 = 24;
 const TERMINAL_COLUMNS: u16 = 80;
 const SCROLLBACK_ROWS: usize = 10_000;
 const TERMINAL_FONT_SIZE: f32 = 14.0;
 const TERMINAL_PADDING: f32 = 10.0;
 const TERMINAL_CURSOR_VERTICAL_OFFSET: f32 = 1.0;
+const MAX_VIEWPORT_ROWS: u16 = 512;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ShellStatus {
@@ -23,6 +24,7 @@ pub enum ShellStatus {
 
 pub struct ShellPanelState {
     parser: vt100::Parser,
+    viewport_rows: u16,
     target: Option<DeviceTarget>,
     session_id: Option<ShellSessionId>,
     status: ShellStatus,
@@ -33,7 +35,12 @@ pub struct ShellPanelState {
 impl Default for ShellPanelState {
     fn default() -> Self {
         Self {
-            parser: vt100::Parser::new(TERMINAL_ROWS, TERMINAL_COLUMNS, SCROLLBACK_ROWS),
+            parser: vt100::Parser::new(
+                REMOTE_TERMINAL_ROWS,
+                TERMINAL_COLUMNS,
+                SCROLLBACK_ROWS,
+            ),
+            viewport_rows: REMOTE_TERMINAL_ROWS,
             target: None,
             session_id: None,
             status: ShellStatus::Disconnected,
@@ -98,8 +105,8 @@ impl ShellPanelState {
         self.session_id = Some(session_id);
         self.status = ShellStatus::Connecting;
         self.error = None;
-        let size =
-            ShellSize::new(TERMINAL_COLUMNS, TERMINAL_ROWS).expect("fixed shell size is valid");
+        let size = ShellSize::new(TERMINAL_COLUMNS, REMOTE_TERMINAL_ROWS)
+            .expect("fixed shell size is valid");
         Some(BackendCommand::OpenShell {
             target,
             session_id,
@@ -120,7 +127,18 @@ impl ShellPanelState {
     }
 
     fn clear_display(&mut self) {
-        self.parser = vt100::Parser::new(TERMINAL_ROWS, TERMINAL_COLUMNS, SCROLLBACK_ROWS);
+        self.parser = vt100::Parser::new(
+            self.viewport_rows,
+            TERMINAL_COLUMNS,
+            SCROLLBACK_ROWS,
+        );
+    }
+
+    fn resize_viewport(&mut self, rows: u16) {
+        if self.viewport_rows != rows {
+            self.parser.set_size(rows, TERMINAL_COLUMNS);
+            self.viewport_rows = rows;
+        }
     }
 
     fn connected(&self) -> bool {
@@ -189,6 +207,7 @@ pub fn show(
     ui.add_space(6.0);
     let desired = ui.available_size().max(egui::vec2(400.0, 260.0));
     let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
+    state.resize_viewport(viewport_rows(ui, rect));
     if response.clicked() || state.focus_terminal {
         response.request_focus();
         state.focus_terminal = false;
@@ -215,6 +234,18 @@ pub fn show(
     }
     paint_terminal(ui, rect, state.parser.screen(), response.has_focus());
     commands
+}
+
+fn viewport_rows(ui: &egui::Ui, rect: egui::Rect) -> u16 {
+    let font_id = egui::FontId::monospace(TERMINAL_FONT_SIZE);
+    let row_height = ui.fonts_mut(|fonts| fonts.row_height(&font_id));
+    rows_for_viewport(rect.height(), row_height)
+}
+
+fn rows_for_viewport(viewport_height: f32, row_height: f32) -> u16 {
+    let usable_height = (viewport_height - 2.0 * TERMINAL_PADDING).max(row_height);
+    let rows = (usable_height / row_height).floor();
+    rows.clamp(1.0, f32::from(MAX_VIEWPORT_ROWS)) as u16
 }
 
 fn terminal_input(ui: &egui::Ui, screen: &vt100::Screen) -> Vec<Vec<u8>> {
@@ -522,6 +553,13 @@ mod tests {
         assert_eq!(output.len(), 2);
         assert_eq!(output[0].len(), MAX_SHELL_INPUT_BYTES);
         assert_eq!(output[1], vec![b'x'; 7]);
+    }
+
+    #[test]
+    fn viewport_rows_fill_available_terminal_height() {
+        assert_eq!(rows_for_viewport(660.0, 16.0), 40);
+        assert_eq!(rows_for_viewport(20.0, 16.0), 1);
+        assert_eq!(rows_for_viewport(20_000.0, 16.0), MAX_VIEWPORT_ROWS);
     }
 
     #[test]
