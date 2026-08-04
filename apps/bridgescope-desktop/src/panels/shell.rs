@@ -236,8 +236,17 @@ fn viewport_rows(ui: &egui::Ui, rect: egui::Rect) -> u16 {
 
 fn rows_for_viewport(viewport_height: f32, row_height: f32) -> u16 {
     let usable_height = (viewport_height - 2.0 * TERMINAL_PADDING).max(row_height);
-    let rows = (usable_height / row_height).floor();
-    rows.clamp(1.0, f32::from(MAX_VIEWPORT_ROWS)) as u16
+    let mut lower = 1;
+    let mut upper = MAX_VIEWPORT_ROWS;
+    while lower < upper {
+        let middle = lower + (upper - lower).div_ceil(2);
+        if f32::from(middle) * row_height <= usable_height {
+            lower = middle;
+        } else {
+            upper = middle - 1;
+        }
+    }
+    lower
 }
 
 fn terminal_input(ui: &egui::Ui, screen: &vt100::Screen) -> Vec<Vec<u8>> {
