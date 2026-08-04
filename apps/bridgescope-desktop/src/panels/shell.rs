@@ -389,17 +389,40 @@ fn control_letter(key: egui::Key) -> Option<u8> {
 }
 
 fn paint_terminal(ui: &egui::Ui, rect: egui::Rect, screen: &vt100::Screen, focused: bool) {
-    ui.painter()
-        .rect_filled(rect, 4.0, Color32::from_rgb(14, 17, 22));
-    ui.painter().rect_stroke(
+    let dark_mode = ui.visuals().dark_mode;
+    let background = if dark_mode {
+        Color32::from_rgb(14, 17, 22)
+    } else {
+        Color32::from_rgb(248, 250, 252)
+    };
+    let foreground = if dark_mode {
+        Color32::from_rgb(220, 226, 235)
+    } else {
+        Color32::from_rgb(24, 31, 42)
+    };
+    let focus_color = if dark_mode {
+        Color32::LIGHT_BLUE
+    } else {
+        Color32::from_rgb(37, 99, 235)
+    };
+    let cursor_color = if dark_mode {
+        Color32::from_white_alpha(80)
+    } else {
+        Color32::from_black_alpha(64)
+    };
+    // Shell output can be much larger than its fixed VT viewport. Clip both
+    // text and cursor so scrollback never paints into adjacent UI regions.
+    let painter = ui.painter().with_clip_rect(rect);
+    painter.rect_filled(rect, 4.0, background);
+    painter.rect_stroke(
         rect,
         4.0,
         egui::Stroke::new(
             if focused { 2.0 } else { 1.0 },
             if focused {
-                Color32::LIGHT_BLUE
+                focus_color
             } else {
-                Color32::DARK_GRAY
+                ui.visuals().widgets.inactive.bg_stroke.color
             },
         ),
         egui::StrokeKind::Inside,
@@ -411,12 +434,12 @@ fn paint_terminal(ui: &egui::Ui, rect: egui::Rect, screen: &vt100::Screen, focus
         contents
     };
     let font_id = egui::FontId::monospace(TERMINAL_FONT_SIZE);
-    ui.painter().text(
+    painter.text(
         rect.left_top() + egui::vec2(TERMINAL_PADDING, TERMINAL_PADDING),
         egui::Align2::LEFT_TOP,
         text,
         font_id.clone(),
-        Color32::from_rgb(220, 226, 235),
+        foreground,
     );
     if !screen.hide_cursor() && focused {
         let (row, column) = screen.cursor_position();
@@ -428,10 +451,10 @@ fn paint_terminal(ui: &egui::Ui, rect: egui::Rect, screen: &vt100::Screen, focus
                 TERMINAL_PADDING + f32::from(column) * cell_width,
                 TERMINAL_PADDING + f32::from(row) * cell_height + TERMINAL_CURSOR_VERTICAL_OFFSET,
             );
-        ui.painter().rect_filled(
+        painter.rect_filled(
             egui::Rect::from_min_size(position, egui::vec2(cell_width, cursor_height)),
             0.0,
-            Color32::from_white_alpha(80),
+            cursor_color,
         );
     }
 }
