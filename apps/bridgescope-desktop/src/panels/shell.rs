@@ -9,7 +9,6 @@ const TERMINAL_COLUMNS: u16 = 80;
 const SCROLLBACK_ROWS: usize = 10_000;
 const TERMINAL_FONT_SIZE: f32 = 14.0;
 const TERMINAL_PADDING: f32 = 10.0;
-const TERMINAL_CURSOR_VERTICAL_OFFSET: f32 = 1.0;
 const MAX_VIEWPORT_ROWS: u16 = 512;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -466,28 +465,23 @@ fn paint_terminal(ui: &egui::Ui, rect: egui::Rect, screen: &vt100::Screen, focus
         contents
     };
     let font_id = egui::FontId::monospace(TERMINAL_FONT_SIZE);
-    painter.text(
-        rect.left_top() + egui::vec2(TERMINAL_PADDING, TERMINAL_PADDING),
-        egui::Align2::LEFT_TOP,
-        text,
-        font_id.clone(),
-        foreground,
-    );
+    let content_origin = rect.left_top() + egui::vec2(TERMINAL_PADDING, TERMINAL_PADDING);
+    let galley = painter.layout_no_wrap(text, font_id.clone(), foreground);
+    painter.galley(content_origin, galley.clone(), foreground);
     if !screen.hide_cursor() && focused {
         let (row, column) = screen.cursor_position();
-        let (cell_width, cell_height) =
-            ui.fonts_mut(|fonts| (fonts.glyph_width(&font_id, 'W'), fonts.row_height(&font_id)));
-        let cursor_height = (cell_height - TERMINAL_CURSOR_VERTICAL_OFFSET).max(1.0);
-        let position = rect.left_top()
-            + egui::vec2(
-                TERMINAL_PADDING + f32::from(column) * cell_width,
-                TERMINAL_PADDING + f32::from(row) * cell_height + TERMINAL_CURSOR_VERTICAL_OFFSET,
+        if let Some(placed_row) = galley.rows.get(usize::from(row)) {
+            let cell_width = ui.fonts_mut(|fonts| fonts.glyph_width(&font_id, 'W'));
+            let cursor_position = content_origin
+                + placed_row.pos.to_vec2()
+                + egui::vec2(placed_row.x_offset(usize::from(column)), 0.0);
+            let cursor_size = egui::vec2(cell_width, placed_row.rect().height());
+            painter.rect_filled(
+                egui::Rect::from_min_size(cursor_position, cursor_size),
+                0.0,
+                cursor_color,
             );
-        painter.rect_filled(
-            egui::Rect::from_min_size(position, egui::vec2(cell_width, cursor_height)),
-            0.0,
-            cursor_color,
-        );
+        }
     }
 }
 
