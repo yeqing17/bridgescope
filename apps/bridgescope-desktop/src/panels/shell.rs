@@ -149,7 +149,9 @@ pub fn show(
         let (label, color) = status_style(state.status);
         ui.colored_label(color, label);
     });
-    ui.small("Expert interface - Android PTY - remote stderr usually merged - panel size set on connect");
+    ui.small(
+        "Expert interface - Android PTY - remote stderr usually merged - panel size set on connect",
+    );
     ui.add_space(8.0);
 
     let online = selected.is_some_and(|record| record.descriptor.state.is_online());

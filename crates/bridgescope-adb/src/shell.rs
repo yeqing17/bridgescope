@@ -315,9 +315,9 @@ mod tests {
                 "-c",
                 "stty rows 40 cols 100 >/dev/null 2>&1; exec /system/bin/sh",
             ]
-                .into_iter()
-                .map(OsString::from)
-                .collect::<Vec<_>>()
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>()
         );
     }
 

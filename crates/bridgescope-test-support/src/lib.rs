@@ -506,10 +506,14 @@ mod tests {
         let devices = fake.list_devices().await.expect("list succeeds");
         assert_eq!(devices[0].state, DeviceState::Unauthorized);
         assert!(fake.device_overview(&serial).await.is_err());
-        assert!(fake
-            .start_shell(&serial, ShellSize::new(80, 24).expect("valid terminal size"))
+        assert!(
+            fake.start_shell(
+                &serial,
+                ShellSize::new(80, 24).expect("valid terminal size")
+            )
             .await
-            .is_err());
+            .is_err()
+        );
         assert!(fake.capture_screenshot(&serial).await.is_err());
     }
 
