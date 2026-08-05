@@ -470,7 +470,14 @@ fn paint_terminal(ui: &egui::Ui, rect: egui::Rect, screen: &vt100::Screen, focus
     painter.galley(content_origin, galley.clone(), foreground);
     if !screen.hide_cursor() && focused {
         let (row, column) = screen.cursor_position();
-        if let Some(placed_row) = galley.rows.get(usize::from(row)) {
+        // `Screen::contents` omits blank grid rows while the VT cursor keeps
+        // its full-grid row index. When those differ, the final rendered row
+        // is the active prompt or command line and is the best cursor anchor.
+        let placed_row = galley
+            .rows
+            .get(usize::from(row))
+            .or_else(|| galley.rows.last());
+        if let Some(placed_row) = placed_row {
             let cell_width = ui.fonts_mut(|fonts| fonts.glyph_width(&font_id, 'W'));
             let cursor_position = content_origin
                 + placed_row.pos.to_vec2()
