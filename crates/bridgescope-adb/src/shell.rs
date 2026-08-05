@@ -1,7 +1,7 @@
 use std::{ffi::OsString, future::Future, path::PathBuf, process::Stdio, time::Duration};
 
 use crate::process::configure_command;
-use bridgescope_domain::{BridgeError, DeviceSerial, ErrorCode};
+use bridgescope_domain::{BridgeError, DeviceSerial, ErrorCode, ShellSize};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
     process::{Child, ChildStdin, Command},
@@ -101,22 +101,30 @@ impl Drop for ShellSessionHandle {
     }
 }
 
-pub(crate) fn shell_arguments(serial: &DeviceSerial) -> Vec<OsString> {
+pub(crate) fn shell_arguments(serial: &DeviceSerial, size: ShellSize) -> Vec<OsString> {
     vec![
         OsString::from("-s"),
         OsString::from(serial.as_str()),
         OsString::from("shell"),
         OsString::from("-tt"),
+        OsString::from("sh"),
+        OsString::from("-c"),
+        OsString::from(format!(
+            "stty rows {} cols {} >/dev/null 2>&1; exec /system/bin/sh",
+            size.rows(),
+            size.columns()
+        )),
     ]
 }
 
 pub(crate) fn start_shell(
     executable: PathBuf,
     serial: &DeviceSerial,
+    size: ShellSize,
 ) -> Result<ShellSessionHandle, BridgeError> {
     let mut command = Command::new(executable);
     command
-        .args(shell_arguments(serial))
+        .args(shell_arguments(serial, size))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -295,9 +303,18 @@ mod tests {
     #[test]
     fn builds_expected_shell_arguments() {
         let serial = DeviceSerial::new("emulator-5554").expect("valid serial");
+        let size = ShellSize::new(100, 40).expect("valid terminal size");
         assert_eq!(
-            shell_arguments(&serial),
-            ["-s", "emulator-5554", "shell", "-tt"]
+            shell_arguments(&serial, size),
+            [
+                "-s",
+                "emulator-5554",
+                "shell",
+                "-tt",
+                "sh",
+                "-c",
+                "stty rows 40 cols 100 >/dev/null 2>&1; exec /system/bin/sh",
+            ]
                 .into_iter()
                 .map(OsString::from)
                 .collect::<Vec<_>>()

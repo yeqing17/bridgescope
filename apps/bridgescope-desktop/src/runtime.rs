@@ -13,7 +13,7 @@ use bridgescope_domain::{
     BackendCommand, BackendEvent, BridgeError, DeviceTarget, ErrorCode, FileTransferDirection,
     FileTransferSummary, OperationId, OverwritePolicy, RawScreenshotPng, RemoteFileMutationKind,
     RemoteFileMutationSummary, RemotePath, ScreenshotData, ScreenshotFormat, ScreenshotImage,
-    ShellSessionId,
+    ShellSessionId, ShellSize,
 };
 use bridgescope_test_support::FakeAdbTransport;
 use eframe::egui;
@@ -198,13 +198,14 @@ async fn run_backend(
                     BackendCommand::LoadOverview(serial) => {
                         load_overview(transport.as_ref(), &registry, serial, &events, &context).await;
                     }
-                    BackendCommand::OpenShell { target, session_id, size: _ } => {
+                    BackendCommand::OpenShell { target, session_id, size } => {
                         open_shell(
                             transport.clone(),
                             &registry,
                             &mut shells,
                             target,
                             session_id,
+                            size,
                             shell_event_context.clone(),
                         ).await;
                     }
@@ -282,6 +283,7 @@ async fn open_shell(
     shells: &mut HashMap<ShellSessionId, ActiveShell>,
     target: DeviceTarget,
     session_id: ShellSessionId,
+    size: ShellSize,
     shell_event_context: ShellEventContext,
 ) {
     if registry.current_online(&target).is_none() {
@@ -300,7 +302,7 @@ async fn open_shell(
         .await;
         return;
     }
-    match transport.start_shell(&target.serial).await {
+    match transport.start_shell(&target.serial, size).await {
         Ok(mut handle) => {
             let input = handle.input();
             insert_shell_input(&shell_event_context.inputs, session_id, input);

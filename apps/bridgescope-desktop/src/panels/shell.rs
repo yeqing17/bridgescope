@@ -4,7 +4,7 @@ use bridgescope_domain::{
 };
 use eframe::egui::{self, Color32};
 
-const REMOTE_TERMINAL_ROWS: u16 = 24;
+const INITIAL_TERMINAL_ROWS: u16 = 24;
 const TERMINAL_COLUMNS: u16 = 80;
 const SCROLLBACK_ROWS: usize = 10_000;
 const TERMINAL_FONT_SIZE: f32 = 14.0;
@@ -34,8 +34,8 @@ pub struct ShellPanelState {
 impl Default for ShellPanelState {
     fn default() -> Self {
         Self {
-            parser: vt100::Parser::new(REMOTE_TERMINAL_ROWS, TERMINAL_COLUMNS, SCROLLBACK_ROWS),
-            viewport_rows: REMOTE_TERMINAL_ROWS,
+            parser: vt100::Parser::new(INITIAL_TERMINAL_ROWS, TERMINAL_COLUMNS, SCROLLBACK_ROWS),
+            viewport_rows: INITIAL_TERMINAL_ROWS,
             target: None,
             session_id: None,
             status: ShellStatus::Disconnected,
@@ -100,8 +100,8 @@ impl ShellPanelState {
         self.session_id = Some(session_id);
         self.status = ShellStatus::Connecting;
         self.error = None;
-        let size = ShellSize::new(TERMINAL_COLUMNS, REMOTE_TERMINAL_ROWS)
-            .expect("fixed shell size is valid");
+        let size = ShellSize::new(TERMINAL_COLUMNS, self.viewport_rows)
+            .expect("viewport shell size is valid");
         Some(BackendCommand::OpenShell {
             target,
             session_id,
@@ -149,7 +149,7 @@ pub fn show(
         let (label, color) = status_style(state.status);
         ui.colored_label(color, label);
     });
-    ui.small("Expert interface · Android PTY · remote stderr usually merged · fixed 80×24 adapter");
+    ui.small("Expert interface - Android PTY - remote stderr usually merged - panel size set on connect");
     ui.add_space(8.0);
 
     let online = selected.is_some_and(|record| record.descriptor.state.is_online());

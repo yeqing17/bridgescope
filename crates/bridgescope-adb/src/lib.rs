@@ -14,7 +14,7 @@ use std::{
 use async_trait::async_trait;
 use bridgescope_domain::{
     BridgeError, DeviceCapabilities, DeviceDescriptor, DeviceOverview, DeviceSerial, DeviceState,
-    ErrorCode, OverwritePolicy, RemoteFileEntry, RemotePath,
+    ErrorCode, OverwritePolicy, RemoteFileEntry, RemotePath, ShellSize,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -95,7 +95,11 @@ pub trait AdbTransport: Send + Sync {
     async fn version(&self) -> Result<String, BridgeError>;
     async fn list_devices(&self) -> Result<Vec<DeviceDescriptor>, BridgeError>;
     async fn device_overview(&self, serial: &DeviceSerial) -> Result<DeviceOverview, BridgeError>;
-    async fn start_shell(&self, serial: &DeviceSerial) -> Result<ShellSessionHandle, BridgeError>;
+    async fn start_shell(
+        &self,
+        serial: &DeviceSerial,
+        size: ShellSize,
+    ) -> Result<ShellSessionHandle, BridgeError>;
     async fn capture_screenshot(&self, serial: &DeviceSerial) -> Result<Vec<u8>, BridgeError>;
     async fn list_directory(
         &self,
@@ -281,8 +285,12 @@ impl AdbTransport for ProcessAdbTransport {
         })
     }
 
-    async fn start_shell(&self, serial: &DeviceSerial) -> Result<ShellSessionHandle, BridgeError> {
-        shell::start_shell(self.executable.clone(), serial)
+    async fn start_shell(
+        &self,
+        serial: &DeviceSerial,
+        size: ShellSize,
+    ) -> Result<ShellSessionHandle, BridgeError> {
+        shell::start_shell(self.executable.clone(), serial, size)
     }
 
     async fn capture_screenshot(&self, serial: &DeviceSerial) -> Result<Vec<u8>, BridgeError> {

@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use bridgescope_adb::{AdbTransport, ShellOutputChunk, ShellSessionHandle, ShellStream};
 use bridgescope_domain::{
     BridgeError, DeviceCapabilities, DeviceDescriptor, DeviceOverview, DeviceSerial, DeviceState,
-    ErrorCode, OverwritePolicy, RemoteFileEntry, RemoteFileKind, RemotePath,
+    ErrorCode, OverwritePolicy, RemoteFileEntry, RemoteFileKind, RemotePath, ShellSize,
 };
 use image::{ImageEncoder, codecs::png::PngEncoder};
 use tokio::sync::{RwLock, mpsc};
@@ -247,7 +247,11 @@ impl AdbTransport for FakeAdbTransport {
         Ok(device.overview.clone())
     }
 
-    async fn start_shell(&self, serial: &DeviceSerial) -> Result<ShellSessionHandle, BridgeError> {
+    async fn start_shell(
+        &self,
+        serial: &DeviceSerial,
+        _size: ShellSize,
+    ) -> Result<ShellSessionHandle, BridgeError> {
         self.online_device(serial).await?;
         Ok(ShellSessionHandle::from_handler(run_fake_shell))
     }
@@ -502,7 +506,10 @@ mod tests {
         let devices = fake.list_devices().await.expect("list succeeds");
         assert_eq!(devices[0].state, DeviceState::Unauthorized);
         assert!(fake.device_overview(&serial).await.is_err());
-        assert!(fake.start_shell(&serial).await.is_err());
+        assert!(fake
+            .start_shell(&serial, ShellSize::new(80, 24).expect("valid terminal size"))
+            .await
+            .is_err());
         assert!(fake.capture_screenshot(&serial).await.is_err());
     }
 
@@ -510,7 +517,10 @@ mod tests {
     async fn fake_shell_welcomes_echoes_interrupts_and_exits() {
         let fake = FakeAdbTransport::default();
         let mut shell = fake
-            .start_shell(&fake_serial())
+            .start_shell(
+                &fake_serial(),
+                ShellSize::new(80, 24).expect("valid terminal size"),
+            )
             .await
             .expect("shell starts");
 
@@ -540,7 +550,10 @@ mod tests {
     async fn fake_shell_close_stops_persistent_session() {
         let fake = FakeAdbTransport::default();
         let mut shell = fake
-            .start_shell(&fake_serial())
+            .start_shell(
+                &fake_serial(),
+                ShellSize::new(80, 24).expect("valid terminal size"),
+            )
             .await
             .expect("shell starts");
         assert_eq!(next_output(&mut shell).await, FAKE_SHELL_WELCOME);
