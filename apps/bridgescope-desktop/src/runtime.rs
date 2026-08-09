@@ -11,9 +11,9 @@ use bridgescope_adb::{AdbLocator, AdbTransport, ProcessAdbTransport, ShellSessio
 use bridgescope_device::DeviceRegistry;
 use bridgescope_domain::{
     BackendCommand, BackendEvent, BridgeError, DeviceTarget, ErrorCode, FileTransferDirection,
-    FileTransferSummary, OperationId, OverwritePolicy, RawScreenshotPng, RemoteFileMutationKind,
-    RemoteFileMutationSummary, RemotePath, ScreenshotData, ScreenshotFormat, ScreenshotImage,
-    ShellSessionId, ShellSize,
+    FileTransferSummary, OperationId, OverwritePolicy, PerformanceSnapshot, ProcessSnapshot,
+    RawScreenshotPng, RemoteFileMutationKind, RemoteFileMutationSummary, RemotePath,
+    ScreenshotData, ScreenshotFormat, ScreenshotImage, ShellSessionId, ShellSize,
 };
 use bridgescope_test_support::FakeAdbTransport;
 use eframe::egui;
@@ -242,6 +242,14 @@ async fn run_backend(
                     }
                     BackendCommand::LoadOverview(serial) => {
                         load_overview(transport.as_ref(), &registry, serial, &events, &context).await;
+                    }
+                    BackendCommand::LoadProcesses(target) => {
+                        load_processes(transport.as_ref(), &registry, target, &events, &context)
+                            .await;
+                    }
+                    BackendCommand::LoadPerformance(target) => {
+                        load_performance(transport.as_ref(), &registry, target, &events, &context)
+                            .await;
                     }
                     BackendCommand::OpenShell { target, session_id, size } => {
                         open_shell(
@@ -1060,6 +1068,112 @@ async fn load_overview(
     match bridgescope_device::load_overview(transport, &serial, generation, registry).await {
         Ok(overview) => send_event(events, context, BackendEvent::OverviewLoaded(overview)).await,
         Err(error) => send_event(events, context, BackendEvent::OperationFailed(error)).await,
+    }
+}
+
+async fn load_processes(
+    transport: &dyn AdbTransport,
+    registry: &DeviceRegistry,
+    target: DeviceTarget,
+    events: &mpsc::Sender<BackendEvent>,
+    context: &egui::Context,
+) {
+    if registry.current_online(&target).is_none() {
+        send_event(
+            events,
+            context,
+            BackendEvent::ProcessesFailed {
+                target,
+                error: BridgeError::new(
+                    ErrorCode::DeviceUnavailable,
+                    "device.target_stale",
+                    "selected device is no longer online",
+                ),
+            },
+        )
+        .await;
+        return;
+    }
+    let event_target = target.clone();
+    send_event(
+        events,
+        context,
+        BackendEvent::ProcessesLoading(target.clone()),
+    )
+    .await;
+    match transport.list_processes(&target.serial).await {
+        Ok(processes) => {
+            send_event(
+                events,
+                context,
+                BackendEvent::ProcessesLoaded(ProcessSnapshot {
+                    target: event_target,
+                    processes,
+                }),
+            )
+            .await;
+        }
+        Err(error) => {
+            send_event(
+                events,
+                context,
+                BackendEvent::ProcessesFailed { target, error },
+            )
+            .await;
+        }
+    }
+}
+
+async fn load_performance(
+    transport: &dyn AdbTransport,
+    registry: &DeviceRegistry,
+    target: DeviceTarget,
+    events: &mpsc::Sender<BackendEvent>,
+    context: &egui::Context,
+) {
+    if registry.current_online(&target).is_none() {
+        send_event(
+            events,
+            context,
+            BackendEvent::PerformanceFailed {
+                target,
+                error: BridgeError::new(
+                    ErrorCode::DeviceUnavailable,
+                    "device.target_stale",
+                    "selected device is no longer online",
+                ),
+            },
+        )
+        .await;
+        return;
+    }
+    let event_target = target.clone();
+    send_event(
+        events,
+        context,
+        BackendEvent::PerformanceLoading(target.clone()),
+    )
+    .await;
+    match transport.performance_metrics(&target.serial).await {
+        Ok(metrics) => {
+            send_event(
+                events,
+                context,
+                BackendEvent::PerformanceLoaded(PerformanceSnapshot {
+                    target: event_target,
+                    metrics,
+                }),
+            )
+            .await;
+        }
+        Err(error) => {
+            send_event(
+                events,
+                context,
+                BackendEvent::PerformanceFailed { target, error },
+            )
+            .await;
+        }
     }
 }
 

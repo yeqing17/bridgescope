@@ -20,6 +20,7 @@ impl Language {
     }
 }
 
+#[allow(clippy::match_same_arms, clippy::too_many_lines)]
 pub fn text(language: Language, key: &str) -> &'static str {
     match (language, key) {
         (Language::Chinese, "overview") => "概览",
@@ -57,6 +58,19 @@ pub fn text(language: Language, key: &str) -> &'static str {
         (Language::Chinese, "product") => "产品",
         (Language::Chinese, "action") => "操作",
         (Language::Chinese, "select") => "选择",
+        (Language::Chinese, "process_snapshot_hint") => "每 3 秒更新一次进程快照",
+        (Language::Chinese, "performance_live_hint") => "每秒采样，保留最近 60 秒",
+        (Language::Chinese, "performance_waiting") => "正在采集性能数据…",
+        (Language::Chinese, "no_processes") => "没有读取到进程",
+        (Language::Chinese, "pid") => "PID",
+        (Language::Chinese, "process_name") => "进程",
+        (Language::Chinese, "user") => "用户",
+        (Language::Chinese, "cpu") => "CPU",
+        (Language::Chinese, "memory") => "内存",
+        (Language::Chinese, "resident") => "常驻内存",
+        (Language::Chinese, "load_1m") => "1 分钟负载",
+        (Language::Chinese, "battery") => "电量",
+        (Language::Chinese, "performance_history") => "性能趋势",
         (_, "overview") => "Overview",
         (_, "files") => "Files",
         (_, "applications") => "Applications",
@@ -97,6 +111,19 @@ pub fn text(language: Language, key: &str) -> &'static str {
         (_, "product") => "Product",
         (_, "action") => "Action",
         (_, "select") => "Select",
+        (_, "process_snapshot_hint") => "Refreshes every 3 seconds",
+        (_, "performance_live_hint") => "Samples every second, keeps the last 60 seconds",
+        (_, "performance_waiting") => "Collecting performance data…",
+        (_, "no_processes") => "No processes returned",
+        (_, "pid") => "PID",
+        (_, "process_name") => "Process",
+        (_, "user") => "User",
+        (_, "cpu") => "CPU",
+        (_, "memory") => "Memory",
+        (_, "resident") => "Resident",
+        (_, "load_1m") => "Load (1m)",
+        (_, "battery") => "Battery",
+        (_, "performance_history") => "Performance history",
         _ => "",
     }
 }

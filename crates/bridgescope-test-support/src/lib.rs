@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use bridgescope_adb::{AdbTransport, ShellOutputChunk, ShellSessionHandle, ShellStream};
 use bridgescope_domain::{
     AdbEndpoint, BridgeError, DeviceCapabilities, DeviceDescriptor, DeviceOverview, DeviceSerial,
-    DeviceState, ErrorCode, OverwritePolicy, RemoteFileEntry, RemoteFileKind, RemotePath,
-    ShellSize,
+    DeviceState, ErrorCode, OverwritePolicy, PerformanceMetrics, ProcessInfo, RemoteFileEntry,
+    RemoteFileKind, RemotePath, ShellSize,
 };
 use image::{ImageEncoder, codecs::png::PngEncoder};
 use tokio::sync::{RwLock, mpsc};
@@ -250,6 +250,46 @@ impl AdbTransport for FakeAdbTransport {
             ));
         }
         Ok(device.overview.clone())
+    }
+
+    async fn list_processes(&self, serial: &DeviceSerial) -> Result<Vec<ProcessInfo>, BridgeError> {
+        self.online_device(serial).await?;
+        Ok(vec![
+            ProcessInfo {
+                pid: 1,
+                name: "init".to_owned(),
+                user: Some("root".to_owned()),
+                state: Some("S".to_owned()),
+                cpu_percent: Some(0.3),
+                memory_percent: Some(0.2),
+                resident_memory_kib: Some(4096),
+            },
+            ProcessInfo {
+                pid: 4242,
+                name: "com.bridgescope.fake".to_owned(),
+                user: Some("u0_a123".to_owned()),
+                state: Some("R".to_owned()),
+                cpu_percent: Some(8.7),
+                memory_percent: Some(1.4),
+                resident_memory_kib: Some(32 * 1024),
+            },
+        ])
+    }
+
+    async fn performance_metrics(
+        &self,
+        serial: &DeviceSerial,
+    ) -> Result<PerformanceMetrics, BridgeError> {
+        self.online_device(serial).await?;
+        Ok(PerformanceMetrics {
+            cpu_usage_percent: Some(23.0),
+            load_average_1m: Some(0.42),
+            memory_total_kib: Some(8 * 1024 * 1024),
+            memory_available_kib: Some(5 * 1024 * 1024),
+            storage_total_kib: Some(128 * 1024 * 1024),
+            storage_used_kib: Some(37 * 1024 * 1024),
+            battery_percent: Some(84),
+        })
     }
 
     async fn start_shell(

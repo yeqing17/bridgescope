@@ -14,7 +14,8 @@ use std::{
 use async_trait::async_trait;
 use bridgescope_domain::{
     AdbEndpoint, BridgeError, DeviceCapabilities, DeviceDescriptor, DeviceOverview, DeviceSerial,
-    DeviceState, ErrorCode, OverwritePolicy, RemoteFileEntry, RemotePath, ShellSize,
+    DeviceState, ErrorCode, OverwritePolicy, PerformanceMetrics, ProcessInfo, RemoteFileEntry,
+    RemotePath, ShellSize,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -96,6 +97,11 @@ pub trait AdbTransport: Send + Sync {
     async fn list_devices(&self) -> Result<Vec<DeviceDescriptor>, BridgeError>;
     async fn connect_endpoint(&self, endpoint: &AdbEndpoint) -> Result<String, BridgeError>;
     async fn device_overview(&self, serial: &DeviceSerial) -> Result<DeviceOverview, BridgeError>;
+    async fn list_processes(&self, serial: &DeviceSerial) -> Result<Vec<ProcessInfo>, BridgeError>;
+    async fn performance_metrics(
+        &self,
+        serial: &DeviceSerial,
+    ) -> Result<PerformanceMetrics, BridgeError>;
     async fn start_shell(
         &self,
         serial: &DeviceSerial,
@@ -290,6 +296,46 @@ impl AdbTransport for ProcessAdbTransport {
         })
     }
 
+    async fn list_processes(&self, serial: &DeviceSerial) -> Result<Vec<ProcessInfo>, BridgeError> {
+        let output = self
+            .shell(
+                serial,
+                &["ps", "-A", "-o", "PID,USER,STAT,%CPU,%MEM,RSS,NAME"],
+            )
+            .await?;
+        parse_processes(&output)
+    }
+
+    async fn performance_metrics(
+        &self,
+        serial: &DeviceSerial,
+    ) -> Result<PerformanceMetrics, BridgeError> {
+        let meminfo = self.shell(serial, &["cat", "/proc/meminfo"]).await?;
+        let loadavg = self.optional_shell(serial, &["cat", "/proc/loadavg"]).await;
+        let cpuinfo = self.optional_shell(serial, &["dumpsys", "cpuinfo"]).await;
+        let battery = self.optional_shell(serial, &["dumpsys", "battery"]).await;
+        let storage = self.optional_shell(serial, &["df", "-k", "/data"]).await;
+        Ok(PerformanceMetrics {
+            cpu_usage_percent: cpuinfo.as_deref().and_then(parse_cpu_usage_percent),
+            load_average_1m: loadavg.as_deref().and_then(parse_load_average_1m),
+            memory_total_kib: parse_mem_value_kib(&meminfo, "MemTotal"),
+            memory_available_kib: parse_mem_value_kib(&meminfo, "MemAvailable")
+                .or_else(|| parse_mem_value_kib(&meminfo, "MemFree")),
+            storage_total_kib: storage
+                .as_deref()
+                .and_then(parse_storage_kib)
+                .map(|value| value.0),
+            storage_used_kib: storage
+                .as_deref()
+                .and_then(parse_storage_kib)
+                .map(|value| value.1),
+            battery_percent: battery
+                .as_deref()
+                .and_then(|value| parse_named_u64(value, "level"))
+                .and_then(|value| u8::try_from(value).ok()),
+        })
+    }
+
     async fn start_shell(
         &self,
         serial: &DeviceSerial,
@@ -411,6 +457,45 @@ pub fn parse_devices(output: &str) -> Result<Vec<DeviceDescriptor>, BridgeError>
     Ok(devices)
 }
 
+pub fn parse_processes(output: &str) -> Result<Vec<ProcessInfo>, BridgeError> {
+    let mut processes = Vec::new();
+    for line in output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        if line.to_ascii_uppercase().starts_with("USER")
+            || line.to_ascii_uppercase().starts_with("PID")
+        {
+            continue;
+        }
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        if fields.len() < 7 {
+            continue;
+        }
+        let Ok(pid) = fields[0].parse() else {
+            continue;
+        };
+        processes.push(ProcessInfo {
+            pid,
+            user: (!fields[1].is_empty()).then(|| fields[1].to_owned()),
+            state: (!fields[2].is_empty()).then(|| fields[2].to_owned()),
+            cpu_percent: parse_percent(fields[3]),
+            memory_percent: parse_percent(fields[4]),
+            resident_memory_kib: fields[5].parse().ok(),
+            name: fields[6..].join(" "),
+        });
+    }
+    processes.sort_by(|left, right| {
+        right
+            .cpu_percent
+            .unwrap_or_default()
+            .total_cmp(&left.cpu_percent.unwrap_or_default())
+            .then_with(|| left.pid.cmp(&right.pid))
+    });
+    Ok(processes)
+}
+
 fn parse_named_u64(output: &str, name: &str) -> Option<u64> {
     output.lines().find_map(|line| {
         let (key, value) = line.trim().split_once(':')?;
@@ -419,8 +504,16 @@ fn parse_named_u64(output: &str, name: &str) -> Option<u64> {
 }
 
 fn parse_mem_total_kib(output: &str) -> Option<u64> {
-    let line = output.lines().find(|line| line.starts_with("MemTotal:"))?;
-    line.split_whitespace().nth(1)?.parse().ok()
+    parse_mem_value_kib(output, "MemTotal")
+}
+
+fn parse_mem_value_kib(output: &str, key: &str) -> Option<u64> {
+    output.lines().find_map(|line| {
+        let (name, value) = line.trim().split_once(':')?;
+        (name == key)
+            .then(|| value.split_whitespace().next()?.parse().ok())
+            .flatten()
+    })
 }
 
 fn parse_storage_kib(output: &str) -> Option<(u64, u64)> {
@@ -430,6 +523,25 @@ fn parse_storage_kib(output: &str) -> Option<(u64, u64)> {
             return None;
         }
         Some((fields[1].parse().ok()?, fields[2].parse().ok()?))
+    })
+}
+
+fn parse_percent(value: &str) -> Option<f32> {
+    value.trim_end_matches('%').parse().ok()
+}
+
+fn parse_load_average_1m(output: &str) -> Option<f32> {
+    output.split_whitespace().next()?.parse().ok()
+}
+
+fn parse_cpu_usage_percent(output: &str) -> Option<f32> {
+    output.lines().find_map(|line| {
+        let upper = line.to_ascii_uppercase();
+        if !upper.contains("TOTAL") {
+            return None;
+        }
+        line.split_whitespace()
+            .find_map(|field| field.strip_suffix('%').and_then(|value| value.parse().ok()))
     })
 }
 
@@ -486,6 +598,28 @@ mod tests {
                 OsString::from("connect"),
                 OsString::from("192.168.1.20:5555")
             ]
+        );
+    }
+
+    #[test]
+    fn parses_process_table_and_sorts_by_cpu() {
+        let output = "PID USER STAT %CPU %MEM RSS NAME\n42 root S 0.5 1.2 128 system_server\n7 user S 12.5 2.0 256 app process\n";
+        let processes = parse_processes(output).expect("valid process output");
+        assert_eq!(processes[0].pid, 7);
+        assert_eq!(processes[0].name, "app process");
+        assert_eq!(processes[1].resident_memory_kib, Some(128));
+    }
+
+    #[test]
+    fn parses_performance_values() {
+        assert_eq!(
+            parse_mem_value_kib("MemTotal:       1024 kB", "MemTotal"),
+            Some(1024)
+        );
+        assert_eq!(parse_load_average_1m("1.25 0.50 0.25 1/20 42"), Some(1.25));
+        assert_eq!(
+            parse_cpu_usage_percent("TOTAL: 18% user + 4% kernel"),
+            Some(18.0)
         );
     }
 }

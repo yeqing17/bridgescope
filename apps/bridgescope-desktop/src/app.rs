@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use bridgescope_domain::{
     AdbEndpoint, BackendCommand, BackendEvent, BridgeError, DeviceOverview, DeviceRecord,
     DeviceSnapshot,
@@ -6,7 +8,7 @@ use eframe::egui::{self, Color32, RichText};
 
 use crate::{
     i18n::{Language, text},
-    panels::{assistant, files, overview, screenshot, shell},
+    panels::{assistant, files, overview, performance, processes, screenshot, shell},
     runtime::RuntimeBridge,
     theme,
 };
@@ -82,6 +84,10 @@ pub struct BridgeScopeApp {
     assistant: assistant::AssistantPanelState,
     assistant_placement: AssistantPlacement,
     files: files::FilesPanelState,
+    processes: processes::ProcessesPanelState,
+    performance: performance::PerformancePanelState,
+    last_process_refresh: Option<Instant>,
+    last_performance_refresh: Option<Instant>,
     active_panel: Panel,
     language: Language,
     dark_mode: bool,
@@ -109,6 +115,10 @@ impl BridgeScopeApp {
             assistant: assistant::AssistantPanelState::default(),
             assistant_placement: AssistantPlacement::Hidden,
             files: files::FilesPanelState::default(),
+            processes: processes::ProcessesPanelState::default(),
+            performance: performance::PerformancePanelState::default(),
+            last_process_refresh: None,
+            last_performance_refresh: None,
             active_panel: Panel::Overview,
             language: Language::Chinese,
             dark_mode: true,
@@ -129,6 +139,8 @@ impl BridgeScopeApp {
             self.screenshot
                 .handle_event(&self.runtime.context(), &event);
             self.assistant.handle_event(&event);
+            self.processes.handle_event(&event);
+            self.performance.handle_event(&event);
             let file_commands = self.files.handle_event(&event);
             for command in file_commands {
                 self.send(command);
@@ -162,6 +174,11 @@ impl BridgeScopeApp {
                         self.overview = None;
                     }
                     self.snapshot = snapshot;
+                    let target = self.selected_record().map(DeviceRecord::target);
+                    self.processes.reset_for(target.clone());
+                    self.performance.reset_for(target);
+                    self.last_process_refresh = None;
+                    self.last_performance_refresh = None;
                 }
                 BackendEvent::OverviewLoading(serial) => {
                     self.loading_overview = self.snapshot.selected.as_ref() == Some(&serial);
@@ -173,6 +190,10 @@ impl BridgeScopeApp {
                         self.last_error = None;
                     }
                 }
+                BackendEvent::ProcessesFailed { error, .. }
+                | BackendEvent::PerformanceFailed { error, .. } => {
+                    self.last_error = Some(error);
+                }
                 BackendEvent::OperationFailed(error) => {
                     self.loading_overview = false;
                     self.last_error = Some(error);
@@ -181,6 +202,10 @@ impl BridgeScopeApp {
                 | BackendEvent::ShellOutput { .. }
                 | BackendEvent::ShellClosed { .. }
                 | BackendEvent::ShellFailed { .. }
+                | BackendEvent::ProcessesLoading(_)
+                | BackendEvent::ProcessesLoaded(_)
+                | BackendEvent::PerformanceLoading(_)
+                | BackendEvent::PerformanceLoaded(_)
                 | BackendEvent::ScreenshotLoading { .. }
                 | BackendEvent::ScreenshotCaptured { .. }
                 | BackendEvent::ScreenshotFailed { .. }
@@ -357,6 +382,7 @@ impl BridgeScopeApp {
     }
 
     fn central_panel(&mut self, context: &egui::Context) {
+        self.refresh_live_panels(context);
         egui::CentralPanel::default().show(context, |ui| {
             if let Some(error) = &self.last_error {
                 egui::Frame::new()
@@ -389,6 +415,8 @@ impl BridgeScopeApp {
                     &mut self.files,
                     selected.as_ref().map(DeviceRecord::target).as_ref(),
                 ),
+                Panel::Processes => processes::show(ui, self.language, &mut self.processes),
+                Panel::Performance => performance::show(ui, self.language, &mut self.performance),
                 _ => {
                     ui.vertical_centered(|ui| {
                         ui.add_space(100.0);
@@ -404,6 +432,40 @@ impl BridgeScopeApp {
                 self.send(command);
             }
         });
+    }
+
+    fn refresh_live_panels(&mut self, context: &egui::Context) {
+        let target = self
+            .selected_record()
+            .filter(|record| record.descriptor.state.is_online())
+            .map(DeviceRecord::target);
+        self.processes.reset_for(target.clone());
+        self.performance.reset_for(target.clone());
+        let now = Instant::now();
+        if self.active_panel == Panel::Processes {
+            context.request_repaint_after(Duration::from_millis(250));
+            if let Some(target) = target.clone()
+                && !self.processes.loading
+                && self
+                    .last_process_refresh
+                    .is_none_or(|last| now.duration_since(last) >= Duration::from_secs(3))
+            {
+                self.last_process_refresh = Some(now);
+                self.send(BackendCommand::LoadProcesses(target));
+            }
+        }
+        if self.active_panel == Panel::Performance {
+            context.request_repaint_after(Duration::from_millis(250));
+            if let Some(target) = target
+                && !self.performance.loading
+                && self
+                    .last_performance_refresh
+                    .is_none_or(|last| now.duration_since(last) >= Duration::from_secs(1))
+            {
+                self.last_performance_refresh = Some(now);
+                self.send(BackendCommand::LoadPerformance(target));
+            }
+        }
     }
 
     fn assistant_dock(&mut self, context: &egui::Context) {

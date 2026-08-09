@@ -349,6 +349,40 @@ pub struct DeviceSnapshot {
     pub selected: Option<DeviceSerial>,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ProcessInfo {
+    pub pid: u32,
+    pub name: String,
+    pub user: Option<String>,
+    pub state: Option<String>,
+    pub cpu_percent: Option<f32>,
+    pub memory_percent: Option<f32>,
+    pub resident_memory_kib: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ProcessSnapshot {
+    pub target: DeviceTarget,
+    pub processes: Vec<ProcessInfo>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct PerformanceMetrics {
+    pub cpu_usage_percent: Option<f32>,
+    pub load_average_1m: Option<f32>,
+    pub memory_total_kib: Option<u64>,
+    pub memory_available_kib: Option<u64>,
+    pub storage_total_kib: Option<u64>,
+    pub storage_used_kib: Option<u64>,
+    pub battery_percent: Option<u8>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct PerformanceSnapshot {
+    pub target: DeviceTarget,
+    pub metrics: PerformanceMetrics,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationRisk {
@@ -638,6 +672,8 @@ pub enum BackendCommand {
     ConnectDevice(AdbEndpoint),
     SelectDevice(Option<DeviceSerial>),
     LoadOverview(DeviceSerial),
+    LoadProcesses(DeviceTarget),
+    LoadPerformance(DeviceTarget),
     OpenShell {
         target: DeviceTarget,
         session_id: ShellSessionId,
@@ -703,7 +739,7 @@ pub enum BackendCommand {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum BackendEvent {
     AdbReady {
         path: String,
@@ -719,6 +755,18 @@ pub enum BackendEvent {
     DevicesChanged(DeviceSnapshot),
     OverviewLoading(DeviceSerial),
     OverviewLoaded(DeviceOverview),
+    ProcessesLoading(DeviceTarget),
+    ProcessesLoaded(ProcessSnapshot),
+    ProcessesFailed {
+        target: DeviceTarget,
+        error: BridgeError,
+    },
+    PerformanceLoading(DeviceTarget),
+    PerformanceLoaded(PerformanceSnapshot),
+    PerformanceFailed {
+        target: DeviceTarget,
+        error: BridgeError,
+    },
     OperationFailed(BridgeError),
     ShellOpened {
         target: DeviceTarget,
