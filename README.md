@@ -51,6 +51,7 @@ cargo build --workspace --release
 - **Interactive Shell:** starts `adb -s SERIAL shell -tt`, streams keyboard input and ANSI output, and supports explicit close/reconnect. This initial adapter uses a fixed 80×24 remote PTY; remote stderr is usually merged and true remote resize awaits native ADB shell-v2.
 - **Screenshot:** captures with binary-safe `adb -s SERIAL exec-out screencap -p`, validates/decodes PNG off the UI thread, displays Fit/100% modes, copies the decoded image, and saves the original PNG.
 - **File manager:** browses remote directories, uploads and downloads files with explicit overwrite confirmation, supports cancellation, creates directories, renames entries, and deletes regular files only. Operations remain bound to the selected device generation and refresh the current listing after completion.
+- **Network devices:** the Device Manager accepts an Android device host/IP and port directly through adb connect, keeps up to eight successful endpoints as local history, and allows reconnecting or forgetting saved endpoints. Device discovery runs once at startup and again only after an explicit refresh or network connection.
 
 ## Safety
 

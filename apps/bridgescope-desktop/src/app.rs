@@ -1,5 +1,6 @@
 use bridgescope_domain::{
-    BackendCommand, BackendEvent, BridgeError, DeviceOverview, DeviceRecord, DeviceSnapshot,
+    AdbEndpoint, BackendCommand, BackendEvent, BridgeError, DeviceOverview, DeviceRecord,
+    DeviceSnapshot,
 };
 use eframe::egui::{self, Color32, RichText};
 
@@ -9,6 +10,9 @@ use crate::{
     runtime::RuntimeBridge,
     theme,
 };
+
+const RECENT_ENDPOINTS_STORAGE_KEY: &str = "bridgescope.recent_adb_endpoints";
+const MAX_RECENT_ENDPOINTS: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Panel {
@@ -83,6 +87,10 @@ pub struct BridgeScopeApp {
     dark_mode: bool,
     adb_path: Option<String>,
     adb_version: Option<String>,
+    recent_endpoints: Vec<AdbEndpoint>,
+    endpoint_host: String,
+    endpoint_port: String,
+    connecting_endpoint: Option<AdbEndpoint>,
     last_error: Option<BridgeError>,
     windows: WindowState,
 }
@@ -106,6 +114,10 @@ impl BridgeScopeApp {
             dark_mode: true,
             adb_path: None,
             adb_version: None,
+            recent_endpoints: load_recent_endpoints(creation_context.storage),
+            endpoint_host: String::new(),
+            endpoint_port: "5555".to_owned(),
+            connecting_endpoint: None,
             last_error: None,
             windows: WindowState::default(),
         }
@@ -128,6 +140,23 @@ impl BridgeScopeApp {
                     self.last_error = None;
                 }
                 BackendEvent::AdbUnavailable(error) => self.last_error = Some(error),
+                BackendEvent::AdbConnecting(endpoint) => {
+                    self.connecting_endpoint = Some(endpoint);
+                    self.last_error = None;
+                }
+                BackendEvent::AdbConnected(endpoint) => {
+                    self.connecting_endpoint = None;
+                    self.remember_endpoint(endpoint);
+                    self.last_error = None;
+                }
+                BackendEvent::AdbConnectFailed { endpoint, error } => {
+                    self.connecting_endpoint = None;
+                    self.last_error = Some(BridgeError::new(
+                        error.code,
+                        error.message_key,
+                        format!("{} ({endpoint})", error.detail),
+                    ));
+                }
                 BackendEvent::DevicesChanged(snapshot) => {
                     if snapshot.selected != self.snapshot.selected {
                         self.overview = None;
@@ -185,6 +214,28 @@ impl BridgeScopeApp {
         if let Err(error) = self.runtime.try_send(command) {
             self.last_error = Some(error);
         }
+    }
+
+    fn endpoint_from_inputs(&self) -> Result<AdbEndpoint, BridgeError> {
+        let port = self
+            .endpoint_port
+            .trim()
+            .parse::<u16>()
+            .map_err(|_| BridgeError::invalid_input("adb.endpoint.port_invalid"))?;
+        AdbEndpoint::new(self.endpoint_host.clone(), port)
+    }
+
+    fn connect_endpoint(&mut self, endpoint: AdbEndpoint) {
+        endpoint.host().clone_into(&mut self.endpoint_host);
+        self.endpoint_port = endpoint.port().to_string();
+        self.connecting_endpoint = Some(endpoint.clone());
+        self.send(BackendCommand::ConnectDevice(endpoint));
+    }
+
+    fn remember_endpoint(&mut self, endpoint: AdbEndpoint) {
+        self.recent_endpoints.retain(|known| known != &endpoint);
+        self.recent_endpoints.insert(0, endpoint);
+        self.recent_endpoints.truncate(MAX_RECENT_ENDPOINTS);
     }
 
     fn top_bar(&mut self, context: &egui::Context) {
@@ -397,8 +448,66 @@ impl BridgeScopeApp {
         let mut open = self.windows.devices;
         egui::Window::new(text(self.language, "device_manager"))
             .open(&mut open)
-            .default_size([760.0, 380.0])
+            .default_size([760.0, 520.0])
             .show(context, |ui| {
+                ui.heading(text(self.language, "connect_android"));
+                ui.horizontal(|ui| {
+                    ui.label(text(self.language, "ip_host"));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.endpoint_host)
+                            .desired_width(220.0)
+                            .hint_text("192.168.1.20"),
+                    );
+                    ui.label(text(self.language, "port"));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.endpoint_port)
+                            .desired_width(80.0)
+                            .hint_text("5555"),
+                    );
+                    let connecting = self.connecting_endpoint.is_some();
+                    if ui
+                        .add_enabled(
+                            !connecting,
+                            egui::Button::new(text(self.language, "connect")),
+                        )
+                        .clicked()
+                    {
+                        match self.endpoint_from_inputs() {
+                            Ok(endpoint) => self.connect_endpoint(endpoint),
+                            Err(error) => self.last_error = Some(error),
+                        }
+                    }
+                });
+                if let Some(endpoint) = &self.connecting_endpoint {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(format!("{} {endpoint}…", text(self.language, "connecting")));
+                    });
+                }
+                if !self.recent_endpoints.is_empty() {
+                    ui.separator();
+                    ui.strong(text(self.language, "recent_network_devices"));
+                    let recent = self.recent_endpoints.clone();
+                    for endpoint in recent {
+                        ui.horizontal(|ui| {
+                            ui.label(endpoint.to_string());
+                            if ui
+                                .add_enabled(
+                                    self.connecting_endpoint.is_none(),
+                                    egui::Button::new(text(self.language, "connect")),
+                                )
+                                .clicked()
+                            {
+                                self.connect_endpoint(endpoint.clone());
+                            }
+                            if ui.button(text(self.language, "forget")).clicked() {
+                                self.recent_endpoints.retain(|known| known != &endpoint);
+                            }
+                        });
+                    }
+                }
+                ui.separator();
+                ui.heading(text(self.language, "connected_devices"));
                 if self.snapshot.devices.is_empty() {
                     ui.label(text(self.language, "no_device"));
                 } else {
@@ -406,11 +515,11 @@ impl BridgeScopeApp {
                         .striped(true)
                         .num_columns(5)
                         .show(ui, |ui| {
-                            ui.strong("Model");
-                            ui.strong("Serial");
-                            ui.strong("State");
-                            ui.strong("Product");
-                            ui.strong("Action");
+                            ui.strong(text(self.language, "model"));
+                            ui.strong(text(self.language, "serial"));
+                            ui.strong(text(self.language, "state"));
+                            ui.strong(text(self.language, "product"));
+                            ui.strong(text(self.language, "action"));
                             ui.end_row();
                             let devices = self.snapshot.devices.clone();
                             for record in devices {
@@ -420,7 +529,10 @@ impl BridgeScopeApp {
                                 ui.label(record.descriptor.product.as_deref().unwrap_or("—"));
                                 let selected = self.snapshot.selected.as_ref()
                                     == Some(&record.descriptor.serial);
-                                if ui.selectable_label(selected, "Select").clicked() {
+                                if ui
+                                    .selectable_label(selected, text(self.language, "select"))
+                                    .clicked()
+                                {
                                     self.send(BackendCommand::SelectDevice(Some(
                                         record.descriptor.serial.clone(),
                                     )));
@@ -477,6 +589,26 @@ impl eframe::App for BridgeScopeApp {
             self.diagnostics(context);
         }
     }
+
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        if let Ok(serialized) = serde_json::to_string(&self.recent_endpoints) {
+            storage.set_string(RECENT_ENDPOINTS_STORAGE_KEY, serialized);
+        }
+    }
+}
+
+fn load_recent_endpoints(storage: Option<&dyn eframe::Storage>) -> Vec<AdbEndpoint> {
+    let Some(serialized) =
+        storage.and_then(|storage| storage.get_string(RECENT_ENDPOINTS_STORAGE_KEY))
+    else {
+        return Vec::new();
+    };
+    serde_json::from_str::<Vec<AdbEndpoint>>(&serialized)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|endpoint| AdbEndpoint::new(endpoint.host(), endpoint.port()).ok())
+        .take(MAX_RECENT_ENDPOINTS)
+        .collect()
 }
 
 #[cfg(test)]

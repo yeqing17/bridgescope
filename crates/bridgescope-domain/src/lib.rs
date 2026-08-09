@@ -1,4 +1,4 @@
-use std::{fmt, path::PathBuf};
+use std::{fmt, net::IpAddr, path::PathBuf};
 
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
@@ -184,6 +184,61 @@ impl DeviceSerial {
 impl fmt::Display for DeviceSerial {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.0)
+    }
+}
+
+/// A host and TCP port accepted by adb connect.
+///
+/// Hosts may be IPv4/IPv6 addresses or DNS names. Delimiters and whitespace
+/// are rejected because the value is passed as one positional ADB argument.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct AdbEndpoint {
+    host: String,
+    port: u16,
+}
+
+impl AdbEndpoint {
+    pub fn new(host: impl Into<String>, port: u16) -> Result<Self, BridgeError> {
+        let raw_host = host.into();
+        let host = raw_host.trim().to_owned();
+        if host.is_empty()
+            || raw_host != host
+            || port == 0
+            || host
+                .chars()
+                .any(|character| character.is_ascii_control() || character.is_whitespace())
+            || host.contains(['[', ']', '/', '\\'])
+            || (host.contains(':') && host.parse::<IpAddr>().is_err())
+        {
+            return Err(BridgeError::invalid_input("adb.endpoint.invalid"));
+        }
+        Ok(Self { host, port })
+    }
+
+    #[must_use]
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
+    #[must_use]
+    pub const fn port(&self) -> u16 {
+        self.port
+    }
+
+    /// Formats the endpoint as the single argument expected by adb connect.
+    #[must_use]
+    pub fn adb_target(&self) -> String {
+        if self.host.contains(':') {
+            format!("[{}]:{}", self.host, self.port)
+        } else {
+            format!("{}:{}", self.host, self.port)
+        }
+    }
+}
+
+impl fmt::Display for AdbEndpoint {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.adb_target())
     }
 }
 
@@ -580,6 +635,7 @@ impl BridgeError {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BackendCommand {
     RefreshDevices,
+    ConnectDevice(AdbEndpoint),
     SelectDevice(Option<DeviceSerial>),
     LoadOverview(DeviceSerial),
     OpenShell {
@@ -654,6 +710,12 @@ pub enum BackendEvent {
         version: String,
     },
     AdbUnavailable(BridgeError),
+    AdbConnecting(AdbEndpoint),
+    AdbConnected(AdbEndpoint),
+    AdbConnectFailed {
+        endpoint: AdbEndpoint,
+        error: BridgeError,
+    },
     DevicesChanged(DeviceSnapshot),
     OverviewLoading(DeviceSerial),
     OverviewLoaded(DeviceOverview),
@@ -798,6 +860,22 @@ mod tests {
     fn serial_redaction_keeps_only_suffix() {
         let serial = DeviceSerial::new("ABCDEF123456").expect("valid serial");
         assert_eq!(serial.redacted(), "device-…3456");
+    }
+
+    #[test]
+    fn adb_endpoint_formats_ipv4_and_ipv6_targets() {
+        let ipv4 = AdbEndpoint::new("192.168.1.20", 5555).expect("valid endpoint");
+        assert_eq!(ipv4.adb_target(), "192.168.1.20:5555");
+        let ipv6 = AdbEndpoint::new("2001:db8::20", 5555).expect("valid endpoint");
+        assert_eq!(ipv6.to_string(), "[2001:db8::20]:5555");
+    }
+
+    #[test]
+    fn adb_endpoint_rejects_unsafe_hosts_and_zero_ports() {
+        assert!(AdbEndpoint::new("", 5555).is_err());
+        assert!(AdbEndpoint::new("192.168.1.20:5555", 5555).is_err());
+        assert!(AdbEndpoint::new("192.168.1.20", 0).is_err());
+        assert!(AdbEndpoint::new("192.168.1.20\n", 5555).is_err());
     }
 
     #[test]

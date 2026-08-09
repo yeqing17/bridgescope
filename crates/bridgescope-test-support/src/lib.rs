@@ -3,8 +3,9 @@ use std::{collections::BTreeMap, path::Path, sync::Arc};
 use async_trait::async_trait;
 use bridgescope_adb::{AdbTransport, ShellOutputChunk, ShellSessionHandle, ShellStream};
 use bridgescope_domain::{
-    BridgeError, DeviceCapabilities, DeviceDescriptor, DeviceOverview, DeviceSerial, DeviceState,
-    ErrorCode, OverwritePolicy, RemoteFileEntry, RemoteFileKind, RemotePath, ShellSize,
+    AdbEndpoint, BridgeError, DeviceCapabilities, DeviceDescriptor, DeviceOverview, DeviceSerial,
+    DeviceState, ErrorCode, OverwritePolicy, RemoteFileEntry, RemoteFileKind, RemotePath,
+    ShellSize,
 };
 use image::{ImageEncoder, codecs::png::PngEncoder};
 use tokio::sync::{RwLock, mpsc};
@@ -226,6 +227,10 @@ impl AdbTransport for FakeAdbTransport {
             .values()
             .map(|device| device.descriptor.clone())
             .collect())
+    }
+
+    async fn connect_endpoint(&self, endpoint: &AdbEndpoint) -> Result<String, BridgeError> {
+        Ok(format!("connected to {}", endpoint.adb_target()))
     }
 
     async fn device_overview(&self, serial: &DeviceSerial) -> Result<DeviceOverview, BridgeError> {

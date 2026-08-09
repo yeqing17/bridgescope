@@ -17,14 +17,13 @@ use bridgescope_domain::{
 };
 use bridgescope_test_support::FakeAdbTransport;
 use eframe::egui;
-use tokio::{runtime::Builder, sync::mpsc, time::MissedTickBehavior};
+use tokio::{runtime::Builder, sync::mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 const CHANNEL_CAPACITY: usize = 64;
 const MAX_SHELL_OUTPUT_BATCH_CHUNKS: usize = 8;
 const SHELL_OUTPUT_COALESCE_WINDOW: Duration = Duration::from_millis(8);
-const REFRESH_INTERVAL: Duration = Duration::from_secs(3);
 const MAX_SCREENSHOT_DIMENSION: u32 = 8192;
 const MAX_SCREENSHOT_PIXELS: u64 = 16_777_216;
 
@@ -162,19 +161,11 @@ async fn run_backend(
         inputs: shell_inputs,
     };
     let (file_result_tx, mut file_result_rx) = mpsc::channel(CHANNEL_CAPACITY);
-    let mut interval = tokio::time::interval(REFRESH_INTERVAL);
-    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let _ = refresh_devices(transport.as_ref(), &mut registry, &events, &context).await;
+    cancel_stale_transfers(&registry, &transfers);
 
     loop {
         tokio::select! {
-            _ = interval.tick() => {
-                refresh_devices(transport.as_ref(), &mut registry, &events, &context).await;
-                for active in transfers.values() {
-                    if registry.current_online(&active.target).is_none() {
-                        active.cancellation.cancel();
-                    }
-                }
-            }
             result = file_result_rx.recv() => {
                 if let Some(result) = result {
                     finish_file_task(result, &mut transfers, &events, &context).await;
@@ -184,7 +175,61 @@ async fn run_backend(
                 let Some(command) = command else { break };
                 match command {
                     BackendCommand::RefreshDevices => {
-                        refresh_devices(transport.as_ref(), &mut registry, &events, &context).await;
+                        let _ =
+                            refresh_devices(transport.as_ref(), &mut registry, &events, &context)
+                                .await;
+                        cancel_stale_transfers(&registry, &transfers);
+                    }
+                    BackendCommand::ConnectDevice(endpoint) => {
+                        send_event(
+                            &events,
+                            &context,
+                            BackendEvent::AdbConnecting(endpoint.clone()),
+                        )
+                        .await;
+                        match transport.connect_endpoint(&endpoint).await {
+                            Ok(_) => {
+                                if refresh_devices(
+                                    transport.as_ref(),
+                                    &mut registry,
+                                    &events,
+                                    &context,
+                                )
+                                .await
+                                .is_ok()
+                                {
+                                    cancel_stale_transfers(&registry, &transfers);
+                                    send_event(
+                                        &events,
+                                        &context,
+                                        BackendEvent::AdbConnected(endpoint),
+                                    )
+                                    .await;
+                                } else {
+                                    send_event(
+                                        &events,
+                                        &context,
+                                        BackendEvent::AdbConnectFailed {
+                                            endpoint,
+                                            error: BridgeError::new(
+                                                ErrorCode::AdbFailed,
+                                                "adb.devices.refresh_failed",
+                                                "ADB connected but device discovery failed",
+                                            ),
+                                        },
+                                    )
+                                    .await;
+                                }
+                            }
+                            Err(error) => {
+                                send_event(
+                                    &events,
+                                    &context,
+                                    BackendEvent::AdbConnectFailed { endpoint, error },
+                                )
+                                .await;
+                            }
+                        }
                     }
                     BackendCommand::SelectDevice(serial) => {
                         match registry.select(serial.clone()) {
@@ -642,6 +687,17 @@ async fn start_transfer(
     });
 }
 
+fn cancel_stale_transfers(
+    registry: &DeviceRegistry,
+    transfers: &HashMap<OperationId, ActiveTransfer>,
+) {
+    for active in transfers.values() {
+        if registry.current_online(&active.target).is_none() {
+            active.cancellation.cancel();
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn start_mutation(
     transport: Arc<dyn AdbTransport>,
@@ -952,7 +1008,7 @@ async fn refresh_devices(
     registry: &mut DeviceRegistry,
     events: &mpsc::Sender<BackendEvent>,
     context: &egui::Context,
-) {
+) -> Result<(), BridgeError> {
     match transport.list_devices().await {
         Ok(devices) => {
             let selected = registry.snapshot().selected;
@@ -971,8 +1027,17 @@ async fn refresh_devices(
             {
                 load_overview(transport, registry, serial, events, context).await;
             }
+            Ok(())
         }
-        Err(error) => send_event(events, context, BackendEvent::OperationFailed(error)).await,
+        Err(error) => {
+            send_event(
+                events,
+                context,
+                BackendEvent::OperationFailed(error.clone()),
+            )
+            .await;
+            Err(error)
+        }
     }
 }
 

@@ -13,8 +13,8 @@ use std::{
 
 use async_trait::async_trait;
 use bridgescope_domain::{
-    BridgeError, DeviceCapabilities, DeviceDescriptor, DeviceOverview, DeviceSerial, DeviceState,
-    ErrorCode, OverwritePolicy, RemoteFileEntry, RemotePath, ShellSize,
+    AdbEndpoint, BridgeError, DeviceCapabilities, DeviceDescriptor, DeviceOverview, DeviceSerial,
+    DeviceState, ErrorCode, OverwritePolicy, RemoteFileEntry, RemotePath, ShellSize,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -94,6 +94,7 @@ fn paths_equal(left: &Path, right: &Path) -> bool {
 pub trait AdbTransport: Send + Sync {
     async fn version(&self) -> Result<String, BridgeError>;
     async fn list_devices(&self) -> Result<Vec<DeviceDescriptor>, BridgeError>;
+    async fn connect_endpoint(&self, endpoint: &AdbEndpoint) -> Result<String, BridgeError>;
     async fn device_overview(&self, serial: &DeviceSerial) -> Result<DeviceOverview, BridgeError>;
     async fn start_shell(
         &self,
@@ -218,6 +219,10 @@ impl AdbTransport for ProcessAdbTransport {
     async fn list_devices(&self) -> Result<Vec<DeviceDescriptor>, BridgeError> {
         let output = self.run(["devices", "-l"]).await?;
         parse_devices(&output)
+    }
+
+    async fn connect_endpoint(&self, endpoint: &AdbEndpoint) -> Result<String, BridgeError> {
+        self.run(connect_arguments(endpoint)).await
     }
 
     async fn device_overview(&self, serial: &DeviceSerial) -> Result<DeviceOverview, BridgeError> {
@@ -428,6 +433,13 @@ fn parse_storage_kib(output: &str) -> Option<(u64, u64)> {
     })
 }
 
+fn connect_arguments(endpoint: &AdbEndpoint) -> [OsString; 2] {
+    [
+        OsString::from("connect"),
+        OsString::from(endpoint.adb_target()),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -462,6 +474,18 @@ mod tests {
                 "Filesystem 1K-blocks Used Available Use% Mounted on\n/dev/a 1000 250 750 25% /data\n"
             ),
             Some((1000, 250))
+        );
+    }
+
+    #[test]
+    fn builds_expected_connect_arguments() {
+        let endpoint = AdbEndpoint::new("192.168.1.20", 5555).expect("valid endpoint");
+        assert_eq!(
+            connect_arguments(&endpoint),
+            [
+                OsString::from("connect"),
+                OsString::from("192.168.1.20:5555")
+            ]
         );
     }
 }
