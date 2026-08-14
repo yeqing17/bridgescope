@@ -28,6 +28,30 @@ struct MutationModal {
     entry: Option<RemoteFileEntry>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum SortKey {
+    #[default]
+    Name,
+    Size,
+    Modified,
+}
+
+fn sort_header(ui: &mut egui::Ui, state: &mut FilesPanelState, key: SortKey, label: &str) {
+    let arrow = match (state.sort_key == key, state.sort_reverse) {
+        (true, false) => " ▼",
+        (true, true) => " ▲",
+        (false, _) => "",
+    };
+    if ui.small_button(format!("{label}{arrow}")).clicked() {
+        if state.sort_key == key {
+            state.sort_reverse = !state.sort_reverse;
+        } else {
+            state.sort_key = key;
+            state.sort_reverse = false;
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct FilesPanelState {
     target: Option<DeviceTarget>,
@@ -36,6 +60,8 @@ pub struct FilesPanelState {
     entries: Vec<RemoteFileEntry>,
     selected: Option<usize>,
     history: Vec<RemotePath>,
+    sort_key: SortKey,
+    sort_reverse: bool,
     listing_request: Option<OperationId>,
     loading: bool,
     transfer: Option<OperationId>,
@@ -254,6 +280,109 @@ fn format_error(error: &BridgeError) -> String {
     format!("{}: {}", error.message_key, error.detail)
 }
 
+fn sort_entries(entries: &mut [RemoteFileEntry], key: SortKey, reverse: bool) {
+    entries.sort_by(|left, right| {
+        let directory_first = u8::from(left.kind != RemoteFileKind::Directory)
+            .cmp(&u8::from(right.kind != RemoteFileKind::Directory));
+        let ordering = match key {
+            SortKey::Name => left.name.to_lowercase().cmp(&right.name.to_lowercase()),
+            SortKey::Size => left.size_bytes.cmp(&right.size_bytes),
+            SortKey::Modified => {
+                left.modified_unix_seconds.cmp(&right.modified_unix_seconds)
+            }
+        };
+        let ordered = if reverse { ordering.reverse() } else { ordering };
+        directory_first.then(ordered)
+    });
+}
+
+/// Seconds between local time and UTC right now, used to render device
+/// timestamps in the user's local time without pulling in a time crate.
+#[cfg(windows)]
+fn local_utc_offset_seconds() -> i64 {
+    #[derive(Clone, Copy)]
+    #[repr(C)]
+    struct SystemTime {
+        year: u16,
+        month: u16,
+        day_of_week: u16,
+        day: u16,
+        hour: u16,
+        minute: u16,
+        second: u16,
+        milliseconds: u16,
+    }
+    unsafe extern "system" {
+        fn GetSystemTime(system_time: *mut SystemTime) -> ();
+        fn GetLocalTime(system_time: *mut SystemTime) -> ();
+    }
+    let mut system = SystemTime {
+        year: 0,
+        month: 0,
+        day_of_week: 0,
+        day: 0,
+        hour: 0,
+        minute: 0,
+        second: 0,
+        milliseconds: 0,
+    };
+    let mut local = system;
+    unsafe {
+        GetSystemTime(&mut system);
+        GetLocalTime(&mut local);
+    }
+    let to_seconds = |time: &SystemTime| {
+        days_from_civil(i64::from(time.year), i64::from(time.month), i64::from(time.day))
+            .saturating_mul(86_400)
+            .saturating_add(i64::from(time.hour) * 3_600)
+            .saturating_add(i64::from(time.minute) * 60)
+            .saturating_add(i64::from(time.second))
+    };
+    to_seconds(&local).saturating_sub(to_seconds(&system))
+}
+
+#[cfg(not(windows))]
+fn local_utc_offset_seconds() -> i64 {
+    0
+}
+
+/// Days since 1970-01-01 for a civil date (Howard Hinnant's algorithm).
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = year - i64::from(month <= 2);
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let day_of_year = (153 * (month + (if month > 2 { -3 } else { 9 })) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
+/// Break days since 1970-01-01 back into (year, month, day).
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let days = days + 719_468;
+    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
+    let day_of_era = days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let mp = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if month <= 2 { year + 1 } else { year }, month as u32, day as u32)
+}
+
+fn format_modified_time(unix_seconds: i64) -> String {
+    let local = unix_seconds + local_utc_offset_seconds();
+    let days = local.div_euclid(86_400);
+    let seconds_of_day = local.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02}",
+        seconds_of_day / 3_600,
+        seconds_of_day % 3_600 / 60
+    )
+}
+
 #[allow(clippy::too_many_lines)]
 pub fn show(
     ui: &mut egui::Ui,
@@ -369,12 +498,14 @@ pub fn show(
             ui.label("Loading…");
         });
     }
-    let entries = state.entries.clone();
+    let mut entries = state.entries.clone();
+    sort_entries(&mut entries, state.sort_key, state.sort_reverse);
     egui::ScrollArea::vertical().show(ui, |ui| {
         egui::Grid::new("files-grid").striped(true).show(ui, |ui| {
-            ui.strong("Name");
+            sort_header(ui, state, SortKey::Name, "Name");
             ui.strong("Type");
-            ui.strong("Size");
+            sort_header(ui, state, SortKey::Size, "Size");
+            sort_header(ui, state, SortKey::Modified, "Modified");
             ui.end_row();
             for (index, entry) in entries.iter().enumerate() {
                 let selected = state.selected == Some(index);
@@ -391,6 +522,10 @@ pub fn show(
                         .size_bytes
                         .map_or("—".to_owned(), |size| size.to_string()),
                 );
+                ui.label(entry.modified_unix_seconds.map_or_else(
+                    || "—".to_owned(),
+                    |seconds| format_modified_time(seconds),
+                ));
                 ui.end_row();
             }
         });
@@ -412,10 +547,7 @@ pub fn show(
                 entry: Some(entry),
             });
         }
-        let can_delete = can_mutate
-            && selected
-                .as_ref()
-                .is_some_and(|entry| entry.kind == RemoteFileKind::File);
+        let can_delete = can_mutate && selected.is_some();
         if ui
             .add_enabled(can_delete, egui::Button::new("Delete"))
             .clicked()
@@ -490,7 +622,7 @@ pub fn show(
             .open(&mut open)
             .show(ui.ctx(), |ui| {
                 if matches!(kind, MutationModalKind::Delete) {
-                    ui.label("Delete the selected regular file? This cannot be undone.");
+                    ui.label("Delete the selected entry? This cannot be undone.");
                 } else {
                     ui.add(egui::TextEdit::singleline(&mut modal.input).desired_width(260.0));
                 }
@@ -522,9 +654,7 @@ pub fn show(
                                     source: entry.path,
                                     destination,
                                 }),
-                            (MutationModalKind::Delete, Some(entry))
-                                if entry.kind == RemoteFileKind::File =>
-                            {
+                            (MutationModalKind::Delete, Some(entry)) => {
                                 Some(BackendCommand::DeleteRemoteFile {
                                     request_id,
                                     target: target.clone(),
@@ -583,5 +713,56 @@ mod tests {
         assert_eq!(state.history.len(), 1);
         let back = state.history.pop().expect("history entry");
         assert_eq!(back.to_string(), "/sdcard");
+    }
+
+    fn entry(
+        name: &str,
+        kind: RemoteFileKind,
+        size: Option<u64>,
+        modified: Option<i64>,
+    ) -> RemoteFileEntry {
+        RemoteFileEntry {
+            path: RemotePath::new(format!("/sdcard/{name}")).expect("valid"),
+            name: name.to_owned(),
+            kind,
+            size_bytes: size,
+            modified_unix_seconds: modified,
+            permissions: None,
+        }
+    }
+
+    #[test]
+    fn sorts_entries_by_key_with_directories_first() {
+        let mut entries = vec![
+            entry("b.txt", RemoteFileKind::File, Some(2), Some(200)),
+            entry("dir", RemoteFileKind::Directory, None, None),
+            entry("a.txt", RemoteFileKind::File, Some(1), Some(100)),
+        ];
+        sort_entries(&mut entries, SortKey::Name, false);
+        let names: Vec<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
+        assert_eq!(names, vec!["dir", "a.txt", "b.txt"]);
+        sort_entries(&mut entries, SortKey::Modified, false);
+        assert_eq!(entries[0].name, "dir");
+        assert_eq!(entries[1].name, "a.txt");
+        sort_entries(&mut entries, SortKey::Modified, true);
+        assert_eq!(entries[0].name, "dir");
+        assert_eq!(entries[1].name, "b.txt");
+    }
+
+    #[test]
+    fn civil_date_conversion_round_trips() {
+        for days in [-25_000, -1, 0, 19_000, 20_000] {
+            let (year, month, day) = civil_from_days(days);
+            assert_eq!(
+                days_from_civil(year, i64::from(month), i64::from(day)),
+                days
+            );
+        }
+    }
+
+    #[test]
+    fn formats_known_timestamp() {
+        let local = 1_700_000_000 + local_utc_offset_seconds();
+        assert_eq!(format_modified_time(local), "2023-11-14 22:13");
     }
 }

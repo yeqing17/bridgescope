@@ -203,7 +203,7 @@ pub(crate) async fn delete_file(
     run_remote_mutation(
         executable,
         serial,
-        "[ -f \"$1\" ] && [ ! -L \"$1\" ] || exit 22; rm -- \"$1\"",
+        "[ -e \"$1\" ] || [ -L \"$1\" ] || exit 22; rm -r -- \"$1\"",
         &[path],
         timeout,
         "file.delete_failed",

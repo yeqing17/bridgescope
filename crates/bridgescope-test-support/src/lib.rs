@@ -522,12 +522,19 @@ impl AdbTransport for FakeAdbTransport {
     ) -> Result<(), BridgeError> {
         self.online_device(serial).await?;
         let mut files = self.files.write().await;
+        let directory_prefix = format!("{}/", path.as_str().trim_end_matches('/'));
         match files.get(path) {
             Some(Some(_)) => {
                 files.remove(path);
                 Ok(())
             }
-            Some(None) => Err(BridgeError::invalid_input("file.delete_not_regular_file")),
+            Some(None) => {
+                files.retain(|entry, _| {
+                    entry != path && !entry.as_str().starts_with(&directory_prefix)
+                });
+                files.remove(path);
+                Ok(())
+            }
             None => Err(BridgeError::new(
                 ErrorCode::PathNotFound,
                 "file.path_not_found",
