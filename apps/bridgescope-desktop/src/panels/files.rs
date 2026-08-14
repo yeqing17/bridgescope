@@ -308,34 +308,29 @@ pub fn show(
             .add_enabled(state.transfer.is_none(), egui::Button::new("Upload"))
             .clicked()
             && let Some(directory) = state.directory.clone()
+            && let Some(local_path) = rfd::FileDialog::new().set_title("Upload file").pick_file()
         {
-            match rfd::FileDialog::new().set_title("Upload file").pick_file() {
-                Some(local_path) => {
-                    match local_path
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .map(|name| directory.join_component(name))
-                    {
-                        Some(Ok(remote_path)) => {
-                            commands.push(state.start_transfer(
-                                TransferIntent {
-                                    direction: FileTransferDirection::Upload,
-                                    target: target.clone(),
-                                    local_path,
-                                    remote_path,
-                                },
-                                OverwritePolicy::Deny,
-                            ));
-                        }
-                        Some(Err(error)) => state.error = Some(error.to_string()),
-                        None => {
-                            state.error = Some(
-                                "Upload failed: local file name is not valid UTF-8.".to_owned(),
-                            );
-                        }
-                    }
+            match local_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| directory.join_component(name))
+            {
+                Some(Ok(remote_path)) => {
+                    commands.push(state.start_transfer(
+                        TransferIntent {
+                            direction: FileTransferDirection::Upload,
+                            target: target.clone(),
+                            local_path,
+                            remote_path,
+                        },
+                        OverwritePolicy::Deny,
+                    ));
                 }
-                None => {}
+                Some(Err(error)) => state.error = Some(error.to_string()),
+                None => {
+                    state.error =
+                        Some("Upload failed: local file name is not valid UTF-8.".to_owned());
+                }
             }
         }
         let can_download = state.transfer.is_none()
