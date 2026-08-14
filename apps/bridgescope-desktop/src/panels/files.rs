@@ -428,7 +428,7 @@ pub fn show(
             state.mutation_modal = Some(MutationModal {
                 kind: MutationModalKind::Delete,
                 input: String::new(),
-                entry: Some(entry),
+                entry: selected.clone(),
             });
         }
     });
