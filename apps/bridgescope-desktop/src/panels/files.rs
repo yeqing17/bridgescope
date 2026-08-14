@@ -21,9 +21,11 @@ enum MutationModalKind {
     Delete,
 }
 
+#[derive(Clone)]
 struct MutationModal {
     kind: MutationModalKind,
     input: String,
+    entry: Option<RemoteFileEntry>,
 }
 
 #[derive(Default)]
@@ -33,6 +35,7 @@ pub struct FilesPanelState {
     path_input: String,
     entries: Vec<RemoteFileEntry>,
     selected: Option<usize>,
+    history: Vec<RemotePath>,
     listing_request: Option<OperationId>,
     loading: bool,
     transfer: Option<OperationId>,
@@ -53,6 +56,7 @@ impl FilesPanelState {
         self.path_input.clear();
         self.entries.clear();
         self.selected = None;
+        self.history.clear();
         self.listing_request = None;
         self.loading = false;
         self.transfer = None;
@@ -134,10 +138,10 @@ impl FilesPanelState {
             {
                 self.transfer = None;
                 let intent = self.transfer_intent.take();
-                if error.code == ErrorCode::AlreadyExists {
-                    if let Some(intent) = intent {
-                        self.overwrite_prompt = Some(intent);
-                    }
+                if error.code == ErrorCode::AlreadyExists
+                    && let Some(intent) = intent
+                {
+                    self.overwrite_prompt = Some(intent);
                 } else {
                     self.error = Some(format_error(error));
                 }
@@ -179,6 +183,16 @@ impl FilesPanelState {
             _ => {}
         }
         commands
+    }
+
+    /// Navigate to `path`, remembering the current directory so "Back" can return.
+    fn navigate(&mut self, target: DeviceTarget, path: RemotePath) -> BackendCommand {
+        if let Some(directory) = &self.directory
+            && *directory != path
+        {
+            self.history.push(directory.clone());
+        }
+        self.list(target, path)
     }
 
     fn list(&mut self, target: DeviceTarget, path: RemotePath) -> BackendCommand {
@@ -253,15 +267,17 @@ pub fn show(
     };
 
     ui.horizontal(|ui| {
-        if ui.button("Back").clicked()
-            && let Some(directory) = state.directory.clone()
-        {
-            commands.push(state.list(target.clone(), directory.parent()));
+        if ui.button("Back").clicked() {
+            if let Some(previous) = state.history.pop() {
+                commands.push(state.list(target.clone(), previous));
+            } else if let Some(directory) = state.directory.clone() {
+                commands.push(state.list(target.clone(), directory.parent()));
+            }
         }
         if ui.button("Up").clicked()
             && let Some(directory) = state.directory.clone()
         {
-            commands.push(state.list(target.clone(), directory.parent()));
+            commands.push(state.navigate(target.clone(), directory.parent()));
         }
         if ui.button("Refresh").clicked()
             && let Some(directory) = state.directory.clone()
@@ -274,7 +290,7 @@ pub fn show(
             || ui.button("Go").clicked()
         {
             match RemotePath::new(state.path_input.clone()) {
-                Ok(path) => commands.push(state.list(target.clone(), path)),
+                Ok(path) => commands.push(state.navigate(target.clone(), path)),
                 Err(error) => state.error = Some(error.to_string()),
             }
         }
@@ -285,28 +301,41 @@ pub fn show(
             state.mutation_modal = Some(MutationModal {
                 kind: MutationModalKind::CreateDirectory,
                 input: String::new(),
+                entry: None,
             });
         }
         if ui
             .add_enabled(state.transfer.is_none(), egui::Button::new("Upload"))
             .clicked()
-            && let (Some(directory), Some(local_path)) = (
-                state.directory.clone(),
-                rfd::FileDialog::new().set_title("Upload file").pick_file(),
-            )
-            && let Some(name) = local_path.file_name().and_then(|name| name.to_str())
+            && let Some(directory) = state.directory.clone()
         {
-            match directory.join_component(name) {
-                Ok(remote_path) => commands.push(state.start_transfer(
-                    TransferIntent {
-                        direction: FileTransferDirection::Upload,
-                        target: target.clone(),
-                        local_path,
-                        remote_path,
-                    },
-                    OverwritePolicy::Deny,
-                )),
-                Err(error) => state.error = Some(error.to_string()),
+            match rfd::FileDialog::new().set_title("Upload file").pick_file() {
+                Some(local_path) => {
+                    match local_path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .map(|name| directory.join_component(name))
+                    {
+                        Some(Ok(remote_path)) => {
+                            commands.push(state.start_transfer(
+                                TransferIntent {
+                                    direction: FileTransferDirection::Upload,
+                                    target: target.clone(),
+                                    local_path,
+                                    remote_path,
+                                },
+                                OverwritePolicy::Deny,
+                            ));
+                        }
+                        Some(Err(error)) => state.error = Some(error.to_string()),
+                        None => {
+                            state.error = Some(
+                                "Upload failed: local file name is not valid UTF-8.".to_owned(),
+                            );
+                        }
+                    }
+                }
+                None => {}
             }
         }
         let can_download = state.transfer.is_none()
@@ -359,7 +388,7 @@ pub fn show(
                     state.selected = Some(index);
                 }
                 if response.double_clicked() && entry.kind == RemoteFileKind::Directory {
-                    commands.push(state.list(target.clone(), entry.path.clone()));
+                    commands.push(state.navigate(target.clone(), entry.path.clone()));
                 }
                 ui.label(format!("{:?}", entry.kind));
                 ui.label(
@@ -384,7 +413,8 @@ pub fn show(
         {
             state.mutation_modal = Some(MutationModal {
                 kind: MutationModalKind::Rename,
-                input: entry.name,
+                input: entry.name.clone(),
+                entry: Some(entry),
             });
         }
         let can_delete = can_mutate
@@ -398,6 +428,7 @@ pub fn show(
             state.mutation_modal = Some(MutationModal {
                 kind: MutationModalKind::Delete,
                 input: String::new(),
+                entry: Some(entry),
             });
         }
     });
@@ -413,15 +444,25 @@ pub fn show(
 
     if let Some(intent) = state.overwrite_prompt.clone() {
         let mut open = true;
-        egui::Window::new("Overwrite remote file?")
+        let (title, message) = match intent.direction {
+            FileTransferDirection::Upload => (
+                "Overwrite remote file?",
+                format!("{} already exists. Replace it?", intent.remote_path),
+            ),
+            FileTransferDirection::Download => (
+                "Overwrite local file?",
+                format!(
+                    "{} already exists. Replace it?",
+                    intent.local_path.display()
+                ),
+            ),
+        };
+        egui::Window::new(title)
             .collapsible(false)
             .resizable(false)
             .open(&mut open)
             .show(ui.ctx(), |ui| {
-                ui.label(format!(
-                    "{} already exists. Replace it?",
-                    intent.remote_path
-                ));
+                ui.label(message);
                 ui.horizontal(|ui| {
                     if ui.button("Replace").clicked() {
                         state.overwrite_prompt = None;
@@ -465,9 +506,8 @@ pub fn show(
                         ui.button("Confirm").clicked()
                     };
                     if confirm {
-                        let selected = state.selected_entry().cloned();
                         let request_id = OperationId::new();
-                        let command = match (kind, selected) {
+                        let command = match (kind, modal.entry.clone()) {
                             (MutationModalKind::CreateDirectory, _) => state
                                 .directory
                                 .clone()
@@ -529,5 +569,24 @@ mod tests {
         let target = DeviceTarget::new(serial, 1);
         let _ = state.reconcile_target(Some(target));
         assert!(state.loading);
+    }
+
+    #[test]
+    fn navigation_records_history_for_back() {
+        let mut state = FilesPanelState::default();
+        let serial = bridgescope_domain::DeviceSerial::new("a").expect("valid");
+        let target = DeviceTarget::new(serial, 1);
+        let _ = state.reconcile_target(Some(target.clone()));
+        state.directory = Some(RemotePath::new("/sdcard").expect("valid"));
+        let _ = state.navigate(
+            target.clone(),
+            RemotePath::new("/sdcard/DCIM").expect("valid"),
+        );
+        assert_eq!(state.history.len(), 1);
+        // Refreshing the same directory must not pollute history.
+        let _ = state.list(target, RemotePath::new("/sdcard/DCIM").expect("valid"));
+        assert_eq!(state.history.len(), 1);
+        let back = state.history.pop().expect("history entry");
+        assert_eq!(back.to_string(), "/sdcard");
     }
 }
