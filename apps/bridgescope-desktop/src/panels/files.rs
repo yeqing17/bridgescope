@@ -287,11 +287,13 @@ fn sort_entries(entries: &mut [RemoteFileEntry], key: SortKey, reverse: bool) {
         let ordering = match key {
             SortKey::Name => left.name.to_lowercase().cmp(&right.name.to_lowercase()),
             SortKey::Size => left.size_bytes.cmp(&right.size_bytes),
-            SortKey::Modified => {
-                left.modified_unix_seconds.cmp(&right.modified_unix_seconds)
-            }
+            SortKey::Modified => left.modified_unix_seconds.cmp(&right.modified_unix_seconds),
         };
-        let ordered = if reverse { ordering.reverse() } else { ordering };
+        let ordered = if reverse {
+            ordering.reverse()
+        } else {
+            ordering
+        };
         directory_first.then(ordered)
     });
 }
@@ -332,11 +334,15 @@ fn local_utc_offset_seconds() -> i64 {
         GetLocalTime(&mut local);
     }
     let to_seconds = |time: &SystemTime| {
-        days_from_civil(i64::from(time.year), i64::from(time.month), i64::from(time.day))
-            .saturating_mul(86_400)
-            .saturating_add(i64::from(time.hour) * 3_600)
-            .saturating_add(i64::from(time.minute) * 60)
-            .saturating_add(i64::from(time.second))
+        days_from_civil(
+            i64::from(time.year),
+            i64::from(time.month),
+            i64::from(time.day),
+        )
+        .saturating_mul(86_400)
+        .saturating_add(i64::from(time.hour) * 3_600)
+        .saturating_add(i64::from(time.minute) * 60)
+        .saturating_add(i64::from(time.second))
     };
     to_seconds(&local).saturating_sub(to_seconds(&system))
 }
@@ -368,7 +374,11 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let mp = (5 * day_of_year + 2) / 153;
     let day = day_of_year - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    (if month <= 2 { year + 1 } else { year }, month as u32, day as u32)
+    (
+        if month <= 2 { year + 1 } else { year },
+        month as u32,
+        day as u32,
+    )
 }
 
 fn format_modified_time(unix_seconds: i64) -> String {
@@ -522,10 +532,11 @@ pub fn show(
                         .size_bytes
                         .map_or("—".to_owned(), |size| size.to_string()),
                 );
-                ui.label(entry.modified_unix_seconds.map_or_else(
-                    || "—".to_owned(),
-                    |seconds| format_modified_time(seconds),
-                ));
+                ui.label(
+                    entry
+                        .modified_unix_seconds
+                        .map_or_else(|| "—".to_owned(), |seconds| format_modified_time(seconds)),
+                );
                 ui.end_row();
             }
         });
