@@ -22,6 +22,34 @@ for entry in "$directory"/* "$directory"/.[!.]* "$directory"/..?*; do
   printf '%s\034%s\034%s\034%s\034%s\000' "$kind" "$name" "$size" "$modified" "$permissions"
 done"#;
 
+/// Quote `word` for POSIX shells so it survives the remote shell verbatim.
+fn shell_quote(word: &str) -> String {
+    format!("'{}'", word.replace('\'', r"'\''"))
+}
+
+/// Build `adb shell` arguments carrying `script` and its positional arguments
+/// as a single pre-quoted command line. Devices without the shell v2 protocol
+/// receive `adb shell` arguments joined by spaces and re-parsed by the remote
+/// shell, so passing the script as separate arguments breaks multi-word
+/// scripts; one pre-quoted string parses identically either way.
+fn shell_arguments(
+    serial: &bridgescope_domain::DeviceSerial,
+    script: &str,
+    positional: &[&str],
+) -> Vec<OsString> {
+    let mut command = format!("sh -c {}", shell_quote(script));
+    for argument in positional {
+        command.push(' ');
+        command.push_str(&shell_quote(argument));
+    }
+    vec![
+        OsString::from("-s"),
+        OsString::from(serial.as_str()),
+        OsString::from("shell"),
+        OsString::from(command),
+    ]
+}
+
 pub(crate) async fn list_directory(
     executable: &Path,
     serial: &bridgescope_domain::DeviceSerial,
@@ -30,16 +58,7 @@ pub(crate) async fn list_directory(
 ) -> Result<Vec<RemoteFileEntry>, BridgeError> {
     let output = process::run_bounded(
         executable,
-        vec![
-            OsString::from("-s"),
-            OsString::from(serial.as_str()),
-            OsString::from("shell"),
-            OsString::from("sh"),
-            OsString::from("-c"),
-            OsString::from(LIST_SCRIPT),
-            OsString::from("bridgescope-files"),
-            OsString::from(path.as_str()),
-        ],
+        shell_arguments(serial, LIST_SCRIPT, &["bridgescope-files", path.as_str()]),
         timeout,
         METADATA_LIMIT,
         STDERR_LIMIT,
@@ -200,17 +219,16 @@ async fn run_remote_mutation(
     timeout: Duration,
     message_key: &'static str,
 ) -> Result<(), BridgeError> {
-    let mut arguments = vec![
-        OsString::from("-s"),
-        OsString::from(serial.as_str()),
-        OsString::from("shell"),
-        OsString::from("sh"),
-        OsString::from("-c"),
-        OsString::from(script),
-        OsString::from("bridgescope-files"),
-    ];
-    arguments.extend(paths.iter().map(|path| OsString::from(path.as_str())));
-    let output = process::run_bounded(executable, arguments, timeout, 4096, STDERR_LIMIT).await?;
+    let mut positional = vec!["bridgescope-files"];
+    positional.extend(paths.iter().map(|path| path.as_str()));
+    let output = process::run_bounded(
+        executable,
+        shell_arguments(serial, script, &positional),
+        timeout,
+        4096,
+        STDERR_LIMIT,
+    )
+    .await?;
     if output.exit_code == Some(0) {
         return Ok(());
     }
@@ -233,16 +251,11 @@ async fn remote_exists(
 ) -> Result<bool, BridgeError> {
     let output = process::run_bounded(
         executable,
-        vec![
-            OsString::from("-s"),
-            OsString::from(serial.as_str()),
-            OsString::from("shell"),
-            OsString::from("sh"),
-            OsString::from("-c"),
-            OsString::from("test -e \"$1\" || test -L \"$1\""),
-            OsString::from("bridgescope-files"),
-            OsString::from(path.as_str()),
-        ],
+        shell_arguments(
+            serial,
+            "test -e \"$1\" || test -L \"$1\"",
+            &["bridgescope-files", path.as_str()],
+        ),
         Duration::from_secs(8),
         1024,
         1024,
@@ -362,5 +375,14 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].name, "Download");
         assert_eq!(entries[1].path.as_str(), "/sdcard/space name.txt");
+    }
+
+    #[test]
+    fn shell_arguments_build_single_quoted_command() {
+        let serial = bridgescope_domain::DeviceSerial::new("a").expect("valid");
+        let arguments = shell_arguments(&serial, "test -e \"$1\"", &["bridgescope-files", "/a'b"]);
+        assert_eq!(arguments.len(), 4);
+        let expected = "sh -c 'test -e \"$1\"' 'bridgescope-files' '/a'\\''b'";
+        assert_eq!(arguments[3].to_string_lossy(), expected);
     }
 }
