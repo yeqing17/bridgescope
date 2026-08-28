@@ -89,7 +89,9 @@ async fn device_utc_offset_seconds(
     let Ok(output) = output else {
         return 0;
     };
-    let device_now = String::from_utf8_lossy(&output.stdout).trim().parse::<i64>();
+    let device_now = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<i64>();
     match device_now {
         Ok(device_now) => {
             let host_now = std::time::SystemTime::now()
@@ -407,8 +409,7 @@ mod tests {
     fn parses_nul_delimited_directory_entries() {
         let directory = RemotePath::new("/sdcard").expect("valid path");
         let output = b"d\x1cDownload\x1c4096\x1c1700000000\x1cdrwxr-xr-x\0f\x1cspace name.txt\x1c12\x1c\x1c-rw-r--r--\0";
-        let entries =
-            parse_directory_entries(&directory, output, 0).expect("valid listing");
+        let entries = parse_directory_entries(&directory, output, 0).expect("valid listing");
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].name, "Download");
         assert_eq!(entries[1].path.as_str(), "/sdcard/space name.txt");
