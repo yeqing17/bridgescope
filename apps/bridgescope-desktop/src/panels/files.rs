@@ -353,6 +353,7 @@ fn local_utc_offset_seconds() -> i64 {
 }
 
 /// Days since 1970-01-01 for a civil date (Howard Hinnant's algorithm).
+#[cfg(any(windows, test))]
 fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let year = year - i64::from(month <= 2);
     let era = if year >= 0 { year } else { year - 399 } / 400;
@@ -376,8 +377,8 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     (
         if month <= 2 { year + 1 } else { year },
-        month as u32,
-        day as u32,
+        u32::try_from(month).expect("month is 1..=12"),
+        u32::try_from(day).expect("day is 1..=31"),
     )
 }
 
@@ -535,7 +536,7 @@ pub fn show(
                 ui.label(
                     entry
                         .modified_unix_seconds
-                        .map_or_else(|| "—".to_owned(), |seconds| format_modified_time(seconds)),
+                        .map_or_else(|| "—".to_owned(), format_modified_time),
                 );
                 ui.end_row();
             }
