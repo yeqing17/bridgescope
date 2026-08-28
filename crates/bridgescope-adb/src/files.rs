@@ -96,7 +96,7 @@ async fn device_utc_offset_seconds(
         Ok(device_now) => {
             let host_now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_secs() as i64)
+                .map(|duration| i64::try_from(duration.as_secs()).unwrap_or_default())
                 .unwrap_or_default();
             ((device_now - host_now + 450) / 900) * 900
         }
