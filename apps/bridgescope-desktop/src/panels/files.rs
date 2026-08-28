@@ -298,71 +298,6 @@ fn sort_entries(entries: &mut [RemoteFileEntry], key: SortKey, reverse: bool) {
     });
 }
 
-/// Seconds between local time and UTC right now, used to render device
-/// timestamps in the user's local time without pulling in a time crate.
-#[cfg(windows)]
-fn local_utc_offset_seconds() -> i64 {
-    #[derive(Clone, Copy)]
-    #[repr(C)]
-    struct SystemTime {
-        year: u16,
-        month: u16,
-        day_of_week: u16,
-        day: u16,
-        hour: u16,
-        minute: u16,
-        second: u16,
-        milliseconds: u16,
-    }
-    unsafe extern "system" {
-        fn GetSystemTime(system_time: *mut SystemTime) -> ();
-        fn GetLocalTime(system_time: *mut SystemTime) -> ();
-    }
-    let mut system = SystemTime {
-        year: 0,
-        month: 0,
-        day_of_week: 0,
-        day: 0,
-        hour: 0,
-        minute: 0,
-        second: 0,
-        milliseconds: 0,
-    };
-    let mut local = system;
-    unsafe {
-        GetSystemTime(&mut system);
-        GetLocalTime(&mut local);
-    }
-    let to_seconds = |time: &SystemTime| {
-        days_from_civil(
-            i64::from(time.year),
-            i64::from(time.month),
-            i64::from(time.day),
-        )
-        .saturating_mul(86_400)
-        .saturating_add(i64::from(time.hour) * 3_600)
-        .saturating_add(i64::from(time.minute) * 60)
-        .saturating_add(i64::from(time.second))
-    };
-    to_seconds(&local).saturating_sub(to_seconds(&system))
-}
-
-#[cfg(not(windows))]
-fn local_utc_offset_seconds() -> i64 {
-    0
-}
-
-/// Days since 1970-01-01 for a civil date (Howard Hinnant's algorithm).
-#[cfg(any(windows, test))]
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
-    let year = year - i64::from(month <= 2);
-    let era = if year >= 0 { year } else { year - 399 } / 400;
-    let year_of_era = year - era * 400;
-    let day_of_year = (153 * (month + (if month > 2 { -3 } else { 9 })) + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    era * 146_097 + day_of_era - 719_468
-}
-
 /// Break days since 1970-01-01 back into (year, month, day).
 fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let days = days + 719_468;
@@ -383,9 +318,8 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 }
 
 fn format_modified_time(unix_seconds: i64) -> String {
-    let local = unix_seconds + local_utc_offset_seconds();
-    let days = local.div_euclid(86_400);
-    let seconds_of_day = local.rem_euclid(86_400);
+    let days = unix_seconds.div_euclid(86_400);
+    let seconds_of_day = unix_seconds.rem_euclid(86_400);
     let (year, month, day) = civil_from_days(days);
     format!(
         "{year:04}-{month:02}-{day:02} {:02}:{:02}",
@@ -762,19 +696,7 @@ mod tests {
     }
 
     #[test]
-    fn civil_date_conversion_round_trips() {
-        for days in [-25_000, -1, 0, 19_000, 20_000] {
-            let (year, month, day) = civil_from_days(days);
-            assert_eq!(
-                days_from_civil(year, i64::from(month), i64::from(day)),
-                days
-            );
-        }
-    }
-
-    #[test]
     fn formats_known_timestamp() {
-        let local = 1_700_000_000 + local_utc_offset_seconds();
-        assert_eq!(format_modified_time(local), "2023-11-14 22:13");
+        assert_eq!(format_modified_time(1_700_000_000), "2023-11-14 22:13");
     }
 }

@@ -67,7 +67,39 @@ pub(crate) async fn list_directory(
     if output.exit_code != Some(0) {
         return Err(map_command_error(&output.stderr, "file.list_failed"));
     }
-    parse_directory_entries(path, &output.stdout)
+    let offset = device_utc_offset_seconds(executable, serial).await;
+    parse_directory_entries(path, &output.stdout, offset)
+}
+
+/// Ask the device for its wall clock and compare it with the host UTC clock to
+/// estimate the device timezone offset (rounded to 15 minutes so small clock
+/// skew does not leak into timestamps). Returns 0 when the probe fails.
+async fn device_utc_offset_seconds(
+    executable: &Path,
+    serial: &bridgescope_domain::DeviceSerial,
+) -> i64 {
+    let output = process::run_bounded(
+        executable,
+        shell_arguments(serial, "date +%s", &[]),
+        Duration::from_secs(8),
+        1024,
+        1024,
+    )
+    .await;
+    let Ok(output) = output else {
+        return 0;
+    };
+    let device_now = String::from_utf8_lossy(&output.stdout).trim().parse::<i64>();
+    match device_now {
+        Ok(device_now) => {
+            let host_now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_secs() as i64)
+                .unwrap_or_default();
+            ((device_now - host_now + 450) / 900) * 900
+        }
+        Err(_) => 0,
+    }
 }
 
 pub(crate) async fn push_file(
@@ -290,6 +322,7 @@ async fn run_transfer(
 fn parse_directory_entries(
     directory: &RemotePath,
     output: &[u8],
+    utc_offset_seconds: i64,
 ) -> Result<Vec<RemoteFileEntry>, BridgeError> {
     let mut entries = Vec::new();
     for record in output
@@ -325,7 +358,10 @@ fn parse_directory_entries(
             name,
             kind,
             size_bytes: text(fields[2])?.parse().ok(),
-            modified_unix_seconds: text(fields[3])?.parse().ok(),
+            modified_unix_seconds: text(fields[3])?
+                .parse::<i64>()
+                .ok()
+                .map(|seconds| seconds + utc_offset_seconds),
             permissions: match text(fields[4])? {
                 value if value.is_empty() => None,
                 value => Some(value),
@@ -371,7 +407,8 @@ mod tests {
     fn parses_nul_delimited_directory_entries() {
         let directory = RemotePath::new("/sdcard").expect("valid path");
         let output = b"d\x1cDownload\x1c4096\x1c1700000000\x1cdrwxr-xr-x\0f\x1cspace name.txt\x1c12\x1c\x1c-rw-r--r--\0";
-        let entries = parse_directory_entries(&directory, output).expect("valid listing");
+        let entries =
+            parse_directory_entries(&directory, output, 0).expect("valid listing");
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].name, "Download");
         assert_eq!(entries[1].path.as_str(), "/sdcard/space name.txt");
