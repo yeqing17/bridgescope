@@ -17,6 +17,10 @@ use bridgescope_domain::{
     RemotePath, ScreenshotData, ScreenshotFormat, ScreenshotImage, ShellSessionId, ShellSize,
     WebViewPage,
 };
+use bridgescope_scrcpy::decoder::{RgbaFrame, VideoDecoder};
+use bridgescope_scrcpy::{
+    ScrcpySessionPlan, server as scrcpy_server, session as scrcpy_session, session::SessionError,
+};
 use bridgescope_test_support::FakeAdbTransport;
 use eframe::egui;
 use futures_util::StreamExt;
@@ -30,9 +34,30 @@ const SHELL_OUTPUT_COALESCE_WINDOW: Duration = Duration::from_millis(8);
 const MAX_SCREENSHOT_DIMENSION: u32 = 8192;
 const MAX_SCREENSHOT_PIXELS: u64 = 16_777_216;
 const DEVTOOLS_HTTP_TIMEOUT: Duration = Duration::from_secs(4);
+/// Total budget for the scrcpy server to come up and announce its video
+/// stream through the forward tunnel.
+const MIRROR_SERVER_TIMEOUT: Duration = Duration::from_secs(15);
+/// One local connect attempt against adb's forward listener.
+const MIRROR_CONNECT_ATTEMPT: Duration = Duration::from_secs(1);
+/// Pause between connect attempts while the server is still booting.
+const MIRROR_CONNECT_RETRY: Duration = Duration::from_millis(150);
+/// Tail of the server shell output kept for surfacing startup failures.
+const MIRROR_SERVER_LOG_TAIL: usize = 2_000;
 
 struct ActiveShell {
     handle: ShellSessionHandle,
+}
+
+/// The latest decoded mirror frame plus a monotonic counter the UI diffs to
+/// detect new frames; frames never travel through the event channel.
+#[derive(Default)]
+pub struct MirrorFrameBuffer {
+    pub frame: Option<Arc<RgbaFrame>>,
+    pub decoded: u64,
+}
+
+struct ActiveMirror {
+    cancellation: CancellationToken,
 }
 
 struct ActiveTransfer {
@@ -65,6 +90,7 @@ pub struct RuntimeBridge {
     shell_inputs: Arc<RwLock<HashMap<ShellSessionId, mpsc::Sender<Vec<u8>>>>>,
     event_rx: mpsc::Receiver<BackendEvent>,
     context: egui::Context,
+    mirror_frames: Arc<std::sync::Mutex<MirrorFrameBuffer>>,
 }
 
 impl RuntimeBridge {
@@ -72,9 +98,11 @@ impl RuntimeBridge {
         let (command_tx, command_rx) = mpsc::channel(CHANNEL_CAPACITY);
         let (event_tx, event_rx) = mpsc::channel(CHANNEL_CAPACITY);
         let shell_inputs = Arc::new(RwLock::new(HashMap::new()));
+        let mirror_frames = Arc::new(std::sync::Mutex::new(MirrorFrameBuffer::default()));
 
         let backend_context = context.clone();
         let backend_shell_inputs = Arc::clone(&shell_inputs);
+        let backend_mirror_frames = Arc::clone(&mirror_frames);
         thread::Builder::new()
             .name("bridgescope-backend".to_owned())
             .spawn(move || {
@@ -88,6 +116,7 @@ impl RuntimeBridge {
                     event_tx,
                     backend_context,
                     backend_shell_inputs,
+                    backend_mirror_frames,
                 ));
             })
             .expect("backend thread must start");
@@ -97,7 +126,14 @@ impl RuntimeBridge {
             shell_inputs,
             event_rx,
             context,
+            mirror_frames,
         }
+    }
+
+    /// Shared mirror frame buffer written by the backend and read by the
+    /// mirror panel on every repaint.
+    pub fn mirror_frames(&self) -> Arc<std::sync::Mutex<MirrorFrameBuffer>> {
+        Arc::clone(&self.mirror_frames)
     }
 
     pub fn try_send(&self, command: BackendCommand) -> Result<(), BridgeError> {
@@ -153,6 +189,7 @@ async fn run_backend(
     events: mpsc::Sender<BackendEvent>,
     context: egui::Context,
     shell_inputs: Arc<RwLock<HashMap<ShellSessionId, mpsc::Sender<Vec<u8>>>>>,
+    mirror_frames: Arc<std::sync::Mutex<MirrorFrameBuffer>>,
 ) {
     let transport = initialize_transport(&events, &context).await;
     let mut ai_provider = initialize_ai(&events, &context).await;
@@ -160,6 +197,7 @@ async fn run_backend(
     let mut shells = HashMap::<ShellSessionId, ActiveShell>::new();
     let mut logcats = HashMap::<LogcatSessionId, ShellSessionHandle>::new();
     let webview_forwards = Arc::new(std::sync::Mutex::new(Vec::<u16>::new()));
+    let mut mirror: Option<ActiveMirror> = None;
     let mut transfers = HashMap::<OperationId, ActiveTransfer>::new();
     let shell_event_context = ShellEventContext {
         events: events.clone(),
@@ -235,6 +273,29 @@ async fn run_backend(
                     }
                     BackendCommand::ListMdnsServices => {
                         list_mdns_services(transport.as_ref(), &events, &context).await;
+                    }
+                    BackendCommand::StartMirror {
+                        request_id,
+                        target,
+                        max_size,
+                        video_bit_rate,
+                    } => {
+                        start_mirror(
+                            Arc::clone(&transport),
+                            &registry,
+                            &mut mirror,
+                            Arc::clone(&mirror_frames),
+                            request_id,
+                            target,
+                            max_size,
+                            video_bit_rate,
+                            &events,
+                            &context,
+                        )
+                        .await;
+                    }
+                    BackendCommand::StopMirror => {
+                        stop_mirror(&mut mirror);
                     }
                     BackendCommand::ConnectDevice(endpoint) => {
                         send_event(
@@ -854,6 +915,326 @@ async fn list_mdns_services(
         Err(error) => BackendEvent::MdnsFailed { error },
     };
     send_event(events, context, event).await;
+}
+
+/// Starts the single mirror session; a running session is stopped first so
+/// there is never more than one active mirror.
+#[allow(clippy::too_many_arguments)]
+async fn start_mirror(
+    transport: Arc<dyn AdbTransport>,
+    registry: &DeviceRegistry,
+    mirror: &mut Option<ActiveMirror>,
+    mirror_frames: Arc<std::sync::Mutex<MirrorFrameBuffer>>,
+    request_id: OperationId,
+    target: DeviceTarget,
+    max_size: Option<u32>,
+    video_bit_rate: u32,
+    events: &mpsc::Sender<BackendEvent>,
+    context: &egui::Context,
+) {
+    stop_mirror(mirror);
+    if registry.current_online(&target).is_none() {
+        let error = stale_target_error(&target);
+        send_event(
+            events,
+            context,
+            BackendEvent::MirrorFailed {
+                request_id,
+                target,
+                error,
+            },
+        )
+        .await;
+        return;
+    }
+    let plan = ScrcpySessionPlan {
+        device: target.serial.clone(),
+        max_size,
+        video_bit_rate,
+    };
+    // 31-bit session id per the scrcpy protocol docs; derived from a v4 UUID
+    // so concurrent BridgeScope instances pick distinct socket names.
+    let scid = (uuid::Uuid::new_v4().as_u128() & 0x7fff_ffff) as u32;
+    // Bare abstract name: the transport's forward_port adds the
+    // `localabstract:` prefix itself.
+    let socket = scrcpy_server::abstract_socket_name(scid);
+    let args = scrcpy_server::server_arguments(scid, &plan);
+    let cancellation = CancellationToken::new();
+    *mirror = Some(ActiveMirror {
+        cancellation: cancellation.clone(),
+    });
+    tokio::spawn(run_mirror_session(
+        transport,
+        target,
+        request_id,
+        args,
+        socket,
+        cancellation,
+        mirror_frames,
+        events.clone(),
+        context.clone(),
+    ));
+}
+
+fn stop_mirror(mirror: &mut Option<ActiveMirror>) {
+    if let Some(active) = mirror.take() {
+        // The session task observes the cancellation, tears the server down,
+        // and reports MirrorStopped; nothing to await here.
+        active.cancellation.cancel();
+    }
+}
+
+/// Runs one mirror session end to end: push the pinned server jar, forward a
+/// local port to the server's abstract socket, launch it inside a shell
+/// session, then demux and decode the video stream until stopped or ended.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+async fn run_mirror_session(
+    transport: Arc<dyn AdbTransport>,
+    target: DeviceTarget,
+    request_id: OperationId,
+    args: Vec<String>,
+    socket: String,
+    cancellation: CancellationToken,
+    mirror_frames: Arc<std::sync::Mutex<MirrorFrameBuffer>>,
+    events: mpsc::Sender<BackendEvent>,
+    context: egui::Context,
+) {
+    let serial = target.serial.clone();
+    let fail =
+        |key: &'static str, detail: String| BridgeError::new(ErrorCode::Internal, key, detail);
+    // Tail of the server shell output, kept for surfacing startup failures.
+    let server_log: Arc<std::sync::Mutex<String>> = Arc::default();
+    let mut forwarded_port: Option<u16> = None;
+
+    // Early cancellation (user hit stop while the start was still queuing)
+    // skips the whole launch sequence.
+    if cancellation.is_cancelled() {
+        send_event(
+            &events,
+            &context,
+            BackendEvent::MirrorStopped { request_id, target },
+        )
+        .await;
+        return;
+    }
+
+    let temp_jar = std::env::temp_dir().join("bridgescope-scrcpy-server.jar");
+    let startup = async {
+        tokio::fs::write(&temp_jar, scrcpy_server::SERVER_JAR)
+            .await
+            .map_err(|error| fail("mirror.jar_write_failed", error.to_string()))?;
+        let remote = RemotePath::new(scrcpy_server::SERVER_REMOTE_PATH)
+            .map_err(|error| fail("mirror.jar_write_failed", error.to_string()))?;
+        transport
+            .push_file(
+                &serial,
+                &temp_jar,
+                &remote,
+                OverwritePolicy::ReplaceConfirmed,
+                cancellation.clone(),
+            )
+            .await
+            .map_err(|error| fail("mirror.push_failed", error.detail.clone()))?;
+        // Forward tunnel: pick a free local port and release it again, so
+        // adb's forward listener can bind it (same probe trick as scrcpy).
+        let probe = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .map_err(|error| fail("mirror.listen_failed", error.to_string()))?;
+        let port = probe
+            .local_addr()
+            .map_err(|error| fail("mirror.listen_failed", error.to_string()))?
+            .port();
+        drop(probe);
+        transport
+            .forward_port(&serial, port, &socket)
+            .await
+            .map_err(|error| fail("mirror.forward_failed", error.detail.clone()))?;
+        forwarded_port = Some(port);
+        let mut shell = transport
+            .start_shell(
+                &serial,
+                ShellSize::new(200, 40)
+                    .map_err(|error| fail("mirror.shell_failed", error.detail.clone()))?,
+            )
+            .await
+            .map_err(|error| fail("mirror.shell_failed", error.detail.clone()))?;
+        let command = format!(
+            "CLASSPATH={} app_process / com.genymobile.scrcpy.Server {}\n",
+            scrcpy_server::SERVER_REMOTE_PATH,
+            args.join(" ")
+        );
+        shell
+            .input()
+            .send(command.into_bytes())
+            .await
+            .map_err(|error| fail("mirror.shell_failed", error.to_string()))?;
+        let log_writer = Arc::clone(&server_log);
+        let mut output = std::mem::replace(shell.output_mut(), mpsc::channel(1).1);
+        tokio::spawn(async move {
+            while let Some(chunk) = output.recv().await {
+                if let Ok(mut tail) = log_writer.lock() {
+                    tail.push_str(&String::from_utf8_lossy(&chunk.bytes));
+                    let length = tail.len();
+                    if length > MIRROR_SERVER_LOG_TAIL {
+                        tail.drain(..length - MIRROR_SERVER_LOG_TAIL);
+                    }
+                }
+            }
+        });
+        // The server listens on the device; adb accepts our local connection
+        // even before the server is up (then closes it on a failed
+        // device-side connect), so poll until the stream header arrives.
+        let deadline = tokio::time::Instant::now() + MIRROR_SERVER_TIMEOUT;
+        let (tcp, header) = loop {
+            if cancellation.is_cancelled() {
+                return Err(fail("mirror.stream_failed", "cancelled".to_owned()));
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(fail("mirror.server_start_timeout", String::new()));
+            }
+            let Ok(Ok(mut tcp)) = tokio::time::timeout(
+                MIRROR_CONNECT_ATTEMPT,
+                tokio::net::TcpStream::connect(("127.0.0.1", port)),
+            )
+            .await
+            else {
+                retry_pause(&cancellation).await;
+                continue;
+            };
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            match tokio::time::timeout(remaining, scrcpy_session::read_stream_header(&mut tcp))
+                .await
+            {
+                Ok(Ok(header)) => break (tcp, header),
+                // The server is not listening yet; adb closed the tunnel.
+                Ok(Err(SessionError::Io(error)))
+                    if error.kind() == std::io::ErrorKind::UnexpectedEof =>
+                {
+                    retry_pause(&cancellation).await;
+                }
+                Ok(Err(error)) => return Err(mirror_stream_error(error)),
+                Err(_) => return Err(fail("mirror.server_start_timeout", String::new())),
+            }
+        };
+        Ok::<_, BridgeError>((
+            tcp,
+            shell,
+            port,
+            header.metadata.width,
+            header.metadata.height,
+        ))
+    }
+    .await;
+    let (mut tcp, shell, port, width, height) = match startup {
+        Ok(parts) => parts,
+        Err(mut error) => {
+            if let Ok(tail) = server_log.lock() {
+                let trimmed = tail.trim();
+                if !trimmed.is_empty() {
+                    error.detail.push_str(" | server: ");
+                    let end = trimmed.len().min(600);
+                    error.detail.push_str(trimmed.get(..end).unwrap_or(trimmed));
+                }
+            }
+            if let Some(port) = forwarded_port.take() {
+                spawn_remove_forward(&transport, &serial, port);
+            }
+            send_event(
+                &events,
+                &context,
+                BackendEvent::MirrorFailed {
+                    request_id,
+                    target,
+                    error,
+                },
+            )
+            .await;
+            return;
+        }
+    };
+    send_event(
+        &events,
+        &context,
+        BackendEvent::MirrorStarted {
+            request_id,
+            target: target.clone(),
+            width,
+            height,
+        },
+    )
+    .await;
+
+    let frame_buffer = Arc::clone(&mirror_frames);
+    let mut decoder = match VideoDecoder::new() {
+        Ok(decoder) => decoder,
+        Err(error) => {
+            send_event(
+                &events,
+                &context,
+                BackendEvent::MirrorFailed {
+                    request_id,
+                    target,
+                    error: fail("mirror.stream_failed", error.to_string()),
+                },
+            )
+            .await;
+            return;
+        }
+    };
+    let result =
+        scrcpy_session::demux_packets(&mut tcp, &mut decoder, &cancellation, &mut |frame| {
+            if let Ok(mut buffer) = frame_buffer.lock() {
+                buffer.decoded += 1;
+                buffer.frame = Some(Arc::new(frame));
+            }
+        })
+        .await;
+
+    drop(tcp);
+    let _ = shell.close().await;
+    spawn_remove_forward(&transport, &serial, port);
+
+    let event = match result {
+        Ok(_) | Err(SessionError::Cancelled) => BackendEvent::MirrorStopped { request_id, target },
+        Err(error) => BackendEvent::MirrorFailed {
+            request_id,
+            target,
+            error: mirror_stream_error(error),
+        },
+    };
+    send_event(&events, &context, event).await;
+}
+
+fn spawn_remove_forward(transport: &Arc<dyn AdbTransport>, serial: &DeviceSerial, port: u16) {
+    let transport = Arc::clone(transport);
+    let serial = serial.clone();
+    tokio::spawn(async move {
+        let _ = transport.remove_forward(&serial, port).await;
+    });
+}
+
+/// Cancellable pause between forward-tunnel connect attempts.
+async fn retry_pause(cancellation: &CancellationToken) {
+    tokio::select! {
+        () = cancellation.cancelled() => {}
+        () = tokio::time::sleep(MIRROR_CONNECT_RETRY) => {}
+    }
+}
+
+/// Maps stream errors to user-visible error keys.
+fn mirror_stream_error(error: SessionError) -> BridgeError {
+    match error {
+        SessionError::Codec { id } => BridgeError::new(
+            ErrorCode::Internal,
+            "mirror.codec_mismatch",
+            format!("codec id 0x{id:08x}"),
+        ),
+        other => BridgeError::new(
+            ErrorCode::Internal,
+            "mirror.stream_failed",
+            other.to_string(),
+        ),
+    }
 }
 
 /// Spawns an emulator; boot completion is observed through the regular device

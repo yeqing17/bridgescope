@@ -4,6 +4,7 @@ pub mod avd;
 pub mod files;
 pub mod layout;
 pub mod logcat;
+pub mod mirror;
 pub mod overview;
 pub mod performance;
 pub mod processes;

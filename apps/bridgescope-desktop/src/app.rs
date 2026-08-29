@@ -1,3 +1,4 @@
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use bridgescope_domain::{
@@ -9,11 +10,11 @@ use eframe::egui::{self, Color32, RichText};
 use crate::{
     i18n::{Language, text},
     panels::{
-        applications, assistant, avd, files, layout, logcat, overview, performance, processes,
-        screenshot, shell, webview,
+        applications, assistant, avd, files, layout, logcat, mirror, overview, performance,
+        processes, screenshot, shell, webview,
     },
     platform,
-    runtime::RuntimeBridge,
+    runtime::{MirrorFrameBuffer, RuntimeBridge},
     theme, wireless,
 };
 
@@ -34,10 +35,11 @@ enum Panel {
     Logcat,
     WebView,
     Avd,
+    Mirror,
 }
 
 impl Panel {
-    const ALL: [Self; 11] = [
+    const ALL: [Self; 12] = [
         Self::Overview,
         Self::Files,
         Self::Applications,
@@ -49,6 +51,7 @@ impl Panel {
         Self::Logcat,
         Self::WebView,
         Self::Avd,
+        Self::Mirror,
     ];
 
     const fn key(self) -> &'static str {
@@ -64,6 +67,7 @@ impl Panel {
             Self::Logcat => "logcat",
             Self::WebView => "webview",
             Self::Avd => "avd",
+            Self::Mirror => "mirror",
         }
     }
 }
@@ -99,6 +103,10 @@ pub struct BridgeScopeApp {
     webview: webview::WebviewPanelState,
     /// Host-scoped (no device selection): lists and launches AVDs.
     avd: avd::AvdPanelState,
+    /// Live video mirroring for the selected device.
+    mirror: mirror::MirrorPanelState,
+    /// Shared decoded-frame buffer written by the backend session task.
+    mirror_frames: Arc<Mutex<MirrorFrameBuffer>>,
     /// Wireless-debugging section of the device-manager window.
     wireless: wireless::WirelessState,
     last_process_refresh: Option<Instant>,
@@ -128,6 +136,7 @@ impl BridgeScopeApp {
         theme::configure(&creation_context.egui_ctx);
         platform::apply_window_chrome(creation_context);
         let runtime = RuntimeBridge::spawn(creation_context.egui_ctx.clone());
+        let mirror_frames = runtime.mirror_frames();
         let stored_ai = load_ai_settings(creation_context.storage);
         let mut app = Self {
             runtime,
@@ -147,6 +156,8 @@ impl BridgeScopeApp {
             layout: layout::LayoutPanelState::default(),
             webview: webview::WebviewPanelState::default(),
             avd: avd::AvdPanelState::default(),
+            mirror: mirror::MirrorPanelState::new(),
+            mirror_frames,
             wireless: wireless::WirelessState::default(),
             last_process_refresh: None,
             last_performance_refresh: None,
@@ -232,6 +243,7 @@ impl BridgeScopeApp {
                 self.send(command);
             }
             self.wireless.handle_event(&event);
+            self.mirror.handle_event(&event);
             match event {
                 BackendEvent::AdbReady { path, version } => {
                     self.adb_path = Some(path);
@@ -313,7 +325,8 @@ impl BridgeScopeApp {
                 | BackendEvent::ApkInstallFailed { error, .. }
                 | BackendEvent::AvdsFailed { error }
                 | BackendEvent::AvdLaunchFailed { error, .. }
-                | BackendEvent::EmulatorKillFailed { error, .. } => {
+                | BackendEvent::EmulatorKillFailed { error, .. }
+                | BackendEvent::MirrorFailed { error, .. } => {
                     self.last_error = Some(error);
                 }
                 BackendEvent::OperationFailed(error) => {
@@ -365,6 +378,8 @@ impl BridgeScopeApp {
                 | BackendEvent::TcpIpFailed { .. }
                 | BackendEvent::MdnsServicesLoaded { .. }
                 | BackendEvent::MdnsFailed { .. }
+                | BackendEvent::MirrorStarted { .. }
+                | BackendEvent::MirrorStopped { .. }
                 | BackendEvent::ScreenshotLoading { .. }
                 | BackendEvent::ScreenshotCaptured { .. }
                 | BackendEvent::ScreenshotFailed { .. }
@@ -674,6 +689,14 @@ impl BridgeScopeApp {
                     Panel::Layout => layout::show(ui, self.language, &mut self.layout),
                     Panel::WebView => webview::show(ui, self.language, &mut self.webview),
                     Panel::Avd => avd::show(ui, self.language, &mut self.avd),
+                    Panel::Mirror => mirror::show(
+                        ui,
+                        self.language,
+                        context,
+                        &mut self.mirror,
+                        &self.mirror_frames,
+                        selected.as_ref().map(DeviceRecord::target).as_ref(),
+                    ),
                 };
                 for command in commands {
                     self.send(command);
@@ -754,6 +777,12 @@ impl BridgeScopeApp {
         if self.active_panel == Panel::Avd {
             // Host-scoped: boot/settle polling and the first load on open.
             for command in avd::auto(&mut self.avd) {
+                self.send(command);
+            }
+        }
+        if self.active_panel == Panel::Mirror {
+            let target = self.selected_record().map(DeviceRecord::target);
+            for command in mirror::auto(&mut self.mirror, target.as_ref()) {
                 self.send(command);
             }
         }
@@ -1196,10 +1225,11 @@ mod tests {
 
     #[test]
     fn all_expected_panels_are_present() {
-        assert_eq!(Panel::ALL.len(), 11);
+        assert_eq!(Panel::ALL.len(), 12);
         assert_eq!(Panel::ALL[0], Panel::Overview);
         assert_eq!(Panel::ALL[9], Panel::WebView);
         assert_eq!(Panel::ALL[10], Panel::Avd);
+        assert_eq!(Panel::ALL[11], Panel::Mirror);
     }
 
     #[test]

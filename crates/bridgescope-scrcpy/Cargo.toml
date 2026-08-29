@@ -7,6 +7,12 @@ rust-version.workspace = true
 
 [dependencies]
 bridgescope-domain = { path = "../bridgescope-domain" }
+openh264.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+[dev-dependencies]
+sha2.workspace = true
 
 [lints]
 workspace = true

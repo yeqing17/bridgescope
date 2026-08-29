@@ -1071,6 +1071,15 @@ pub enum BackendCommand {
     },
     /// List the wireless-debugging services currently advertised via mDNS.
     ListMdnsServices,
+    /// Start the single video-mirror session (stops any current one first).
+    StartMirror {
+        request_id: OperationId,
+        target: DeviceTarget,
+        max_size: Option<u32>,
+        video_bit_rate: u32,
+    },
+    /// Stop the current mirror session if one is running.
+    StopMirror,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1203,6 +1212,24 @@ pub enum BackendEvent {
         services: Vec<MdnsService>,
     },
     MdnsFailed {
+        error: BridgeError,
+    },
+    /// The mirror session connected and announced its video dimensions.
+    MirrorStarted {
+        request_id: OperationId,
+        target: DeviceTarget,
+        width: u32,
+        height: u32,
+    },
+    /// The mirror session ended without a protocol error (user stop or the
+    /// server closed the stream).
+    MirrorStopped {
+        request_id: OperationId,
+        target: DeviceTarget,
+    },
+    MirrorFailed {
+        request_id: OperationId,
+        target: DeviceTarget,
         error: BridgeError,
     },
     OperationFailed(BridgeError),

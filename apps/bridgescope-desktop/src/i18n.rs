@@ -294,6 +294,25 @@ pub fn text(language: Language, key: &str) -> &'static str {
         (Language::Chinese, "wireless_mdns_hint") => "列出局域网内正在广播的调试服务。",
         (Language::Chinese, "wireless_connect") => "连接",
         (Language::Chinese, "wireless_none") => "未发现调试服务。",
+        (Language::Chinese, "mirror") => "投屏",
+        (Language::Chinese, "mirror_hint") => {
+            "将所选设备的实时画面镜像到本窗口（仅视频，不注入触控）。"
+        }
+        (Language::Chinese, "mirror_start") => "开始投屏",
+        (Language::Chinese, "mirror_stop") => "停止投屏",
+        (Language::Chinese, "mirror_starting") => "正在启动设备端服务…",
+        (Language::Chinese, "mirror_running") => "投屏中",
+        (Language::Chinese, "mirror_native") => "原生分辨率",
+        (Language::Chinese, "mirror_need_device") => "请先选择一个在线设备",
+        (Language::Chinese, "mirror_waiting") => "等待设备视频流…",
+        (Language::Chinese, "mirror.jar_write_failed") => "写入投屏服务临时文件失败",
+        (Language::Chinese, "mirror.push_failed") => "推送投屏服务到设备失败",
+        (Language::Chinese, "mirror.listen_failed") => "本机监听端口失败",
+        (Language::Chinese, "mirror.forward_failed") => "建立 ADB 端口转发失败",
+        (Language::Chinese, "mirror.shell_failed") => "启动设备端进程失败",
+        (Language::Chinese, "mirror.server_start_timeout") => "设备端服务启动超时",
+        (Language::Chinese, "mirror.stream_failed") => "视频流异常",
+        (Language::Chinese, "mirror.codec_mismatch") => "视频流编码不是 H.264",
         (Language::Chinese, "adb.cancelled") => "操作已取消",
         (Language::Chinese, "adb.command_failed") => "ADB 命令执行失败",
         (Language::Chinese, "adb.devices.invalid_line") => "ADB 设备列表格式异常",
@@ -602,6 +621,25 @@ automatically."
         (_, "wireless_mdns_hint") => "Lists the debug services currently advertised on the LAN.",
         (_, "wireless_connect") => "Connect",
         (_, "wireless_none") => "No debug services discovered.",
+        (_, "mirror") => "Mirror",
+        (_, "mirror_hint") => {
+            "Mirrors the selected device's live screen into this window (video only, no touch injection)."
+        }
+        (_, "mirror_start") => "Start mirroring",
+        (_, "mirror_stop") => "Stop mirroring",
+        (_, "mirror_starting") => "Starting the on-device server…",
+        (_, "mirror_running") => "Mirroring",
+        (_, "mirror_native") => "Native resolution",
+        (_, "mirror_need_device") => "Select an online device first",
+        (_, "mirror_waiting") => "Waiting for the device video stream…",
+        (_, "mirror.jar_write_failed") => "Failed to write the mirror server temp file",
+        (_, "mirror.push_failed") => "Failed to push the mirror server to the device",
+        (_, "mirror.listen_failed") => "Failed to listen on a local port",
+        (_, "mirror.forward_failed") => "Failed to set up the ADB port forward",
+        (_, "mirror.shell_failed") => "Failed to start the on-device process",
+        (_, "mirror.server_start_timeout") => "The on-device server did not start in time",
+        (_, "mirror.stream_failed") => "Video stream error",
+        (_, "mirror.codec_mismatch") => "The video stream is not H.264",
         (_, "performance_live_hint") => "Samples every second, keeps the last 60 seconds",
         (_, "performance_waiting") => "Collecting performance data…",
         (_, "no_processes") => "No processes returned",
@@ -935,6 +973,18 @@ mod tests {
         "wireless_none",
     ];
 
+    const MIRROR_KEYS: &[&str] = &[
+        "mirror",
+        "mirror_hint",
+        "mirror_start",
+        "mirror_stop",
+        "mirror_starting",
+        "mirror_running",
+        "mirror_native",
+        "mirror_need_device",
+        "mirror_waiting",
+    ];
+
     #[test]
     fn files_screenshot_shell_keys_translate_for_both_languages() {
         for language in [Language::English, Language::Chinese] {
@@ -948,6 +998,7 @@ mod tests {
                 .chain(APPLICATIONS_KEYS)
                 .chain(AVD_KEYS)
                 .chain(WIRELESS_KEYS)
+                .chain(MIRROR_KEYS)
                 .chain(["refresh", "confirm", "cancel", "connect", "copy"].iter())
             {
                 assert!(
@@ -1022,6 +1073,14 @@ mod tests {
         "applications.install_failed",
         "device.target_stale",
         "wireless.pair_invalid",
+        "mirror.codec_mismatch",
+        "mirror.forward_failed",
+        "mirror.jar_write_failed",
+        "mirror.listen_failed",
+        "mirror.push_failed",
+        "mirror.server_start_timeout",
+        "mirror.shell_failed",
+        "mirror.stream_failed",
     ];
 
     #[test]
