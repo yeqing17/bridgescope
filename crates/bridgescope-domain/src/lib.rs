@@ -349,6 +349,107 @@ pub struct DeviceSnapshot {
     pub selected: Option<DeviceSerial>,
 }
 
+/// An Android package name (e.g. `com.example.app`).
+///
+/// The allow-list (ASCII letters, digits, underscores, dots) mirrors the Java
+/// package rules Android enforces and doubles as the injection guard: the
+/// value is embedded as one argument of an `adb shell pm …` command, so any
+/// whitespace, quote, or shell metacharacter is impossible by construction.
+#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct PackageName(String);
+
+const MAX_PACKAGE_NAME_BYTES: usize = 255;
+
+impl PackageName {
+    pub fn new(value: impl Into<String>) -> Result<Self, BridgeError> {
+        let value = value.into();
+        let valid = !value.is_empty()
+            && value.len() <= MAX_PACKAGE_NAME_BYTES
+            && value.starts_with(|character: char| character.is_ascii_alphanumeric())
+            && value.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '_' | '.')
+            });
+        if !valid {
+            return Err(BridgeError::invalid_input("application.package.invalid"));
+        }
+        Ok(Self(value))
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for PackageName {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+/// One installed application as reported by the package manager.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ApplicationRecord {
+    pub package: PackageName,
+    pub system: bool,
+    pub disabled: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ApplicationSnapshot {
+    pub target: DeviceTarget,
+    pub applications: Vec<ApplicationRecord>,
+}
+
+/// Best-effort details for one application, parsed from `dumpsys package`.
+///
+/// No `Default`: an empty [`PackageName`] would be invalid by construction.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ApplicationDetails {
+    pub package: PackageName,
+    pub version_name: Option<String>,
+    pub version_code: Option<u64>,
+    pub min_sdk: Option<u32>,
+    pub target_sdk: Option<u32>,
+    pub first_install_time: Option<String>,
+    pub last_update_time: Option<String>,
+    pub installer: Option<String>,
+    pub apk_path: Option<String>,
+    pub permissions: Vec<String>,
+}
+
+/// The actions BridgeScope can perform on one installed application.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ApplicationAction {
+    Launch,
+    ForceStop,
+    ClearData,
+    Freeze,
+    Unfreeze,
+    Uninstall,
+}
+
+impl ApplicationAction {
+    /// True when completing the action changes the package list, so the
+    /// panel should refresh its snapshot afterwards.
+    #[must_use]
+    pub fn mutates_listing(self) -> bool {
+        matches!(self, Self::Freeze | Self::Unfreeze | Self::Uninstall)
+    }
+}
+
+/// Decoded launcher-icon pixels for one application.
+///
+/// The transport extracts the icon from the installed APK and decodes it;
+/// only ready-to-upload RGBA travels toward the UI.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ApplicationIconData {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ProcessInfo {
     pub pid: u32,
@@ -440,6 +541,89 @@ impl fmt::Display for ShellSessionId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(formatter)
     }
+}
+
+/// Identifier of one live logcat stream.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct LogcatSessionId(Uuid);
+
+impl LogcatSessionId {
+    #[must_use]
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+
+impl Default for LogcatSessionId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// One parsed node of the foreground window hierarchy.
+// The booleans mirror the `uiautomator` dump attributes one to one.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct LayoutNode {
+    /// Stable pre-order index assigned during parsing, used as the UI
+    /// selection key.
+    pub id: usize,
+    pub class: String,
+    pub resource_id: String,
+    pub text: String,
+    pub content_description: String,
+    /// `[x, y, width, height]` in screen pixels.
+    pub bounds: [i32; 4],
+    pub clickable: bool,
+    pub scrollable: bool,
+    pub enabled: bool,
+    pub selected: bool,
+    pub focused: bool,
+    pub package: String,
+    pub children: Vec<LayoutNode>,
+}
+
+impl LayoutNode {
+    /// Depth-first node count including `self`.
+    #[must_use]
+    pub fn count(&self) -> usize {
+        1 + self.children.iter().map(Self::count).sum::<usize>()
+    }
+
+    /// Collect every node (self first) matching `predicate`.
+    pub fn find_all<'a>(
+        &'a self,
+        predicate: &dyn Fn(&LayoutNode) -> bool,
+        out: &mut Vec<&'a Self>,
+    ) {
+        if predicate(self) {
+            out.push(self);
+        }
+        for child in &self.children {
+            child.find_all(predicate, out);
+        }
+    }
+}
+
+/// Parsed `uiautomator dump` result for one capture.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LayoutSnapshot {
+    pub target: DeviceTarget,
+    pub root: LayoutNode,
+    /// The untouched hierarchy XML, kept for export.
+    pub raw_xml: String,
+    pub captured_at_unix_seconds: u64,
+}
+
+/// One inspectable page exposed by a WebView's devtools socket.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WebViewPage {
+    pub title: String,
+    pub url: String,
+    /// `page`, `webview`, `service_worker`, … as reported by CDP.
+    pub kind: String,
+    /// `webSocketDebuggerUrl` from `/json/list`.
+    pub debugger_url: String,
 }
 
 /// One bounded, non-empty byte chunk written to an interactive shell.
@@ -666,6 +850,52 @@ impl BridgeError {
     }
 }
 
+/// AI provider settings as supplied by the UI.
+///
+/// The API key lives only in memory (and in the desktop app's private local
+/// storage); [`fmt::Debug`] masks it so it never reaches logs or error text.
+#[derive(Clone, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AiSettings {
+    /// Base URL of an OpenAI-compatible chat-completions API,
+    /// e.g. `https://api.openai.com/v1`.
+    pub endpoint: String,
+    pub model: String,
+    pub api_key: String,
+    #[serde(default = "default_ai_timeout_seconds")]
+    pub timeout_seconds: u64,
+}
+
+fn default_ai_timeout_seconds() -> u64 {
+    30
+}
+
+impl AiSettings {
+    /// True when endpoint and model are present, i.e. the settings describe a
+    /// provider the runtime could try to construct. The key may still be empty.
+    #[must_use]
+    pub fn is_usable(&self) -> bool {
+        !self.endpoint.trim().is_empty() && !self.model.trim().is_empty()
+    }
+}
+
+impl fmt::Debug for AiSettings {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AiSettings")
+            .field("endpoint", &self.endpoint)
+            .field("model", &self.model)
+            .field(
+                "api_key",
+                &if self.api_key.is_empty() {
+                    "<empty>"
+                } else {
+                    "<redacted>"
+                },
+            )
+            .field("timeout_seconds", &self.timeout_seconds)
+            .finish()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BackendCommand {
     RefreshDevices,
@@ -674,6 +904,26 @@ pub enum BackendCommand {
     LoadOverview(DeviceSerial),
     LoadProcesses(DeviceTarget),
     LoadPerformance(DeviceTarget),
+    LoadApplications(DeviceTarget),
+    LoadApplicationDetails {
+        request_id: OperationId,
+        target: DeviceTarget,
+        package: PackageName,
+    },
+    RunApplicationAction {
+        request_id: OperationId,
+        action: ApplicationAction,
+        target: DeviceTarget,
+        package: PackageName,
+    },
+    /// Extract launcher icons for the listed packages. One
+    /// [`BackendEvent::ApplicationIconLoaded`] is emitted per package that
+    /// yields an icon; packages without an extractable icon are skipped so
+    /// the UI keeps its fallback tile.
+    LoadApplicationIcons {
+        target: DeviceTarget,
+        packages: Vec<PackageName>,
+    },
     OpenShell {
         target: DeviceTarget,
         session_id: ShellSessionId,
@@ -700,6 +950,10 @@ pub enum BackendCommand {
         request_id: OperationId,
         prompt: String,
     },
+    /// Install (or, with `None`, remove) the AI provider for this session.
+    /// Constructed from the settings dialog; the runtime answers with
+    /// [`BackendEvent::AiReady`] or [`BackendEvent::AiUnavailable`].
+    ConfigureAi(Option<AiSettings>),
     ListDirectory {
         request_id: OperationId,
         target: DeviceTarget,
@@ -737,6 +991,33 @@ pub enum BackendCommand {
         path: RemotePath,
         confirmed: bool,
     },
+    /// Start a live `logcat` stream for the target. The runtime answers with
+    /// [`BackendEvent::LogcatStarted`] and then [`BackendEvent::LogcatOutput`]
+    /// chunks until [`BackendEvent::LogcatClosed`] or [`LogcatFailed`].
+    StartLogcat {
+        target: DeviceTarget,
+        session_id: LogcatSessionId,
+    },
+    StopLogcat(LogcatSessionId),
+    /// Dump and parse the foreground window hierarchy via `uiautomator`.
+    CaptureLayout {
+        request_id: OperationId,
+        target: DeviceTarget,
+    },
+    /// Enumerate the device's WebView devtools sockets (from
+    /// `/proc/net/unix`).
+    ListWebviewSockets {
+        request_id: OperationId,
+        target: DeviceTarget,
+    },
+    /// Forward a local TCP port to a devtools socket and list the inspectable
+    /// pages over the Chrome DevTools HTTP endpoint.
+    ListWebviewPages {
+        request_id: OperationId,
+        target: DeviceTarget,
+        socket: String,
+        port: u16,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -767,6 +1048,51 @@ pub enum BackendEvent {
         target: DeviceTarget,
         error: BridgeError,
     },
+    ApplicationsLoading(DeviceTarget),
+    ApplicationsLoaded(ApplicationSnapshot),
+    ApplicationsFailed {
+        target: DeviceTarget,
+        error: BridgeError,
+    },
+    ApplicationDetailsLoading {
+        request_id: OperationId,
+        target: DeviceTarget,
+        package: PackageName,
+    },
+    ApplicationDetailsLoaded {
+        request_id: OperationId,
+        details: ApplicationDetails,
+    },
+    ApplicationDetailsFailed {
+        request_id: OperationId,
+        target: DeviceTarget,
+        package: PackageName,
+        error: BridgeError,
+    },
+    ApplicationActionStarted {
+        request_id: OperationId,
+        action: ApplicationAction,
+        target: DeviceTarget,
+        package: PackageName,
+    },
+    ApplicationActionCompleted {
+        request_id: OperationId,
+        action: ApplicationAction,
+        target: DeviceTarget,
+        package: PackageName,
+    },
+    ApplicationActionFailed {
+        request_id: OperationId,
+        action: ApplicationAction,
+        target: DeviceTarget,
+        package: PackageName,
+        error: BridgeError,
+    },
+    ApplicationIconLoaded {
+        target: DeviceTarget,
+        package: PackageName,
+        icon: ApplicationIconData,
+    },
     OperationFailed(BridgeError),
     ShellOpened {
         target: DeviceTarget,
@@ -782,6 +1108,60 @@ pub enum BackendEvent {
     },
     ShellFailed {
         session_id: ShellSessionId,
+        error: BridgeError,
+    },
+    LogcatStarted {
+        target: DeviceTarget,
+        session_id: LogcatSessionId,
+    },
+    LogcatOutput {
+        session_id: LogcatSessionId,
+        bytes: Vec<u8>,
+    },
+    LogcatClosed {
+        session_id: LogcatSessionId,
+    },
+    LogcatFailed {
+        session_id: LogcatSessionId,
+        error: BridgeError,
+    },
+    LayoutLoading {
+        request_id: OperationId,
+        target: DeviceTarget,
+    },
+    LayoutCaptured {
+        request_id: OperationId,
+        snapshot: LayoutSnapshot,
+    },
+    LayoutFailed {
+        request_id: OperationId,
+        target: DeviceTarget,
+        error: BridgeError,
+    },
+    WebviewSocketsLoading {
+        request_id: OperationId,
+        target: DeviceTarget,
+    },
+    WebviewSocketsLoaded {
+        request_id: OperationId,
+        target: DeviceTarget,
+        sockets: Vec<String>,
+    },
+    WebviewPagesLoading {
+        request_id: OperationId,
+        target: DeviceTarget,
+        socket: String,
+    },
+    WebviewPagesLoaded {
+        request_id: OperationId,
+        target: DeviceTarget,
+        socket: String,
+        port: u16,
+        pages: Vec<WebViewPage>,
+    },
+    WebviewFailed {
+        request_id: OperationId,
+        target: DeviceTarget,
         error: BridgeError,
     },
     ScreenshotLoading {
@@ -902,6 +1282,18 @@ mod tests {
     fn serial_rejects_control_characters() {
         assert!(DeviceSerial::new("serial\nother").is_err());
         assert!(DeviceSerial::new("").is_err());
+    }
+
+    #[test]
+    fn package_names_reject_shell_metacharacters() {
+        assert!(PackageName::new("com.example.app").is_ok());
+        assert!(PackageName::new("com.example.android_app naïve").is_err());
+        assert!(PackageName::new("com;rm -rf /").is_err());
+        assert!(PackageName::new("$(reboot)").is_err());
+        assert!(PackageName::new("com..example\n").is_err());
+        assert!(PackageName::new(".starts.with.dot").is_err());
+        assert!(PackageName::new("").is_err());
+        assert!(PackageName::new("a".repeat(256)).is_err());
     }
 
     #[test]
@@ -1026,5 +1418,39 @@ mod tests {
         let id = ShellSessionId::from_uuid(uuid);
         assert_eq!(id.as_uuid(), uuid);
         assert_eq!(id.to_string(), uuid.to_string());
+    }
+
+    #[test]
+    fn ai_settings_debug_masks_the_api_key() {
+        let settings = AiSettings {
+            endpoint: "https://example.invalid/v1".to_owned(),
+            model: "demo".to_owned(),
+            api_key: "sk-secret-value".to_owned(),
+            timeout_seconds: 30,
+        };
+        let rendered = format!("{settings:?}");
+        assert!(!rendered.contains("sk-secret-value"), "{rendered}");
+        assert!(rendered.contains("<redacted>"));
+    }
+
+    #[test]
+    fn ai_settings_usable_requires_endpoint_and_model() {
+        assert!(!AiSettings::default().is_usable());
+        let mut settings = AiSettings {
+            endpoint: "https://example.invalid/v1".to_owned(),
+            ..AiSettings::default()
+        };
+        assert!(!settings.is_usable());
+        settings.model = "demo".to_owned();
+        assert!(settings.is_usable());
+    }
+
+    #[test]
+    fn ai_settings_deserialize_applies_default_timeout() {
+        let settings: AiSettings = serde_json::from_str(
+            "{\"endpoint\":\"https://e/v1\",\"model\":\"m\",\"api_key\":\"k\"}",
+        )
+        .expect("valid json");
+        assert_eq!(settings.timeout_seconds, 30);
     }
 }

@@ -10,13 +10,15 @@ use std::{
 use bridgescope_adb::{AdbLocator, AdbTransport, ProcessAdbTransport, ShellSessionHandle};
 use bridgescope_device::DeviceRegistry;
 use bridgescope_domain::{
-    BackendCommand, BackendEvent, BridgeError, DeviceTarget, ErrorCode, FileTransferDirection,
-    FileTransferSummary, OperationId, OverwritePolicy, PerformanceSnapshot, ProcessSnapshot,
+    ApplicationAction, ApplicationSnapshot, BackendCommand, BackendEvent, BridgeError,
+    DeviceTarget, ErrorCode, FileTransferDirection, FileTransferSummary, LogcatSessionId,
+    OperationId, OverwritePolicy, PackageName, PerformanceSnapshot, ProcessSnapshot,
     RawScreenshotPng, RemoteFileMutationKind, RemoteFileMutationSummary, RemotePath,
-    ScreenshotData, ScreenshotFormat, ScreenshotImage, ShellSessionId, ShellSize,
+    ScreenshotData, ScreenshotFormat, ScreenshotImage, ShellSessionId, ShellSize, WebViewPage,
 };
 use bridgescope_test_support::FakeAdbTransport;
 use eframe::egui;
+use futures_util::StreamExt;
 use tokio::{runtime::Builder, sync::mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -26,6 +28,7 @@ const MAX_SHELL_OUTPUT_BATCH_CHUNKS: usize = 8;
 const SHELL_OUTPUT_COALESCE_WINDOW: Duration = Duration::from_millis(8);
 const MAX_SCREENSHOT_DIMENSION: u32 = 8192;
 const MAX_SCREENSHOT_PIXELS: u64 = 16_777_216;
+const DEVTOOLS_HTTP_TIMEOUT: Duration = Duration::from_secs(4);
 
 struct ActiveShell {
     handle: ShellSessionHandle,
@@ -151,9 +154,11 @@ async fn run_backend(
     shell_inputs: Arc<RwLock<HashMap<ShellSessionId, mpsc::Sender<Vec<u8>>>>>,
 ) {
     let transport = initialize_transport(&events, &context).await;
-    let ai_provider = initialize_ai(&events, &context).await;
+    let mut ai_provider = initialize_ai(&events, &context).await;
     let mut registry = DeviceRegistry::default();
     let mut shells = HashMap::<ShellSessionId, ActiveShell>::new();
+    let mut logcats = HashMap::<LogcatSessionId, ShellSessionHandle>::new();
+    let webview_forwards = Arc::new(std::sync::Mutex::new(Vec::<u16>::new()));
     let mut transfers = HashMap::<OperationId, ActiveTransfer>::new();
     let shell_event_context = ShellEventContext {
         events: events.clone(),
@@ -251,6 +256,46 @@ async fn run_backend(
                         load_performance(transport.as_ref(), &registry, target, &events, &context)
                             .await;
                     }
+                    BackendCommand::LoadApplications(target) => {
+                        load_applications(transport.as_ref(), &registry, target, &events, &context)
+                            .await;
+                    }
+                    BackendCommand::LoadApplicationDetails { request_id, target, package } => {
+                        load_application_details(
+                            transport.as_ref(),
+                            &registry,
+                            request_id,
+                            target,
+                            package,
+                            &events,
+                            &context,
+                        )
+                        .await;
+                    }
+                    BackendCommand::LoadApplicationIcons { target, packages } => {
+                        load_application_icons(
+                            transport.as_ref(),
+                            &registry,
+                            target,
+                            packages,
+                            &events,
+                            &context,
+                        )
+                        .await;
+                    }
+                    BackendCommand::RunApplicationAction { request_id, action, target, package } => {
+                        run_application_action(
+                            transport.as_ref(),
+                            &registry,
+                            request_id,
+                            action,
+                            target,
+                            package,
+                            &events,
+                            &context,
+                        )
+                        .await;
+                    }
                     BackendCommand::OpenShell { target, session_id, size } => {
                         open_shell(
                             transport.clone(),
@@ -301,6 +346,9 @@ async fn run_backend(
                             context.clone(),
                         ).await;
                     }
+                    BackendCommand::ConfigureAi(settings) => {
+                        configure_ai(&mut ai_provider, settings, &events, &context).await;
+                    }
                     BackendCommand::ListDirectory { request_id, target, path } => {
                         list_directory(transport.as_ref(), &registry, request_id, target, path, &events, &context).await;
                     }
@@ -323,6 +371,60 @@ async fn run_backend(
                     }
                     BackendCommand::DeleteRemoteFile { request_id, target, path, confirmed } => {
                         start_mutation(transport.clone(), &registry, file_result_tx.clone(), request_id, target, RemoteFileMutationKind::DeleteFile, path, None, confirmed).await;
+                    }
+                    BackendCommand::StartLogcat { target, session_id } => {
+                        start_logcat_session(
+                            transport.clone(),
+                            &registry,
+                            &mut logcats,
+                            target,
+                            session_id,
+                            shell_event_context.clone(),
+                        )
+                        .await;
+                    }
+                    BackendCommand::StopLogcat(session_id) => {
+                        // Dropping the handle kills the adb child; the session's
+                        // forwarder task observes the closed channel and emits
+                        // `LogcatClosed` for the UI.
+                        logcats.remove(&session_id);
+                    }
+                    BackendCommand::CaptureLayout { request_id, target } => {
+                        capture_layout(
+                            transport.clone(),
+                            &registry,
+                            request_id,
+                            target,
+                            events.clone(),
+                            context.clone(),
+                        )
+                        .await;
+                    }
+                    BackendCommand::ListWebviewSockets { request_id, target } => {
+                        list_webview_sockets(
+                            transport.clone(),
+                            &registry,
+                            Arc::clone(&webview_forwards),
+                            request_id,
+                            target,
+                            events.clone(),
+                            context.clone(),
+                        )
+                        .await;
+                    }
+                    BackendCommand::ListWebviewPages { request_id, target, socket, port } => {
+                        list_webview_pages(
+                            transport.clone(),
+                            &registry,
+                            Arc::clone(&webview_forwards),
+                            request_id,
+                            target,
+                            socket,
+                            port,
+                            events.clone(),
+                            context.clone(),
+                        )
+                        .await;
                     }
                 }
             }
@@ -435,6 +537,344 @@ async fn collect_shell_output_batch(
         }
     }
     bytes
+}
+
+async fn start_logcat_session(
+    transport: Arc<dyn AdbTransport>,
+    registry: &DeviceRegistry,
+    logcats: &mut HashMap<LogcatSessionId, ShellSessionHandle>,
+    target: DeviceTarget,
+    session_id: LogcatSessionId,
+    shell_event_context: ShellEventContext,
+) {
+    if registry.current_online(&target).is_none() {
+        let error = stale_target_error(&target);
+        send_event(
+            &shell_event_context.events,
+            &shell_event_context.context,
+            BackendEvent::LogcatFailed { session_id, error },
+        )
+        .await;
+        return;
+    }
+    match transport.start_logcat(&target.serial).await {
+        Ok(mut handle) => {
+            let mut output = std::mem::replace(handle.output_mut(), mpsc::channel(1).1);
+            let events = shell_event_context.events.clone();
+            let context = shell_event_context.context.clone();
+            tokio::spawn(async move {
+                while let Some(chunk) = output.recv().await {
+                    let bytes = collect_shell_output_batch(chunk.bytes, &mut output).await;
+                    send_event(
+                        &events,
+                        &context,
+                        BackendEvent::LogcatOutput { session_id, bytes },
+                    )
+                    .await;
+                }
+                send_event(&events, &context, BackendEvent::LogcatClosed { session_id }).await;
+            });
+            logcats.insert(session_id, handle);
+            send_event(
+                &shell_event_context.events,
+                &shell_event_context.context,
+                BackendEvent::LogcatStarted { target, session_id },
+            )
+            .await;
+        }
+        Err(error) => {
+            send_event(
+                &shell_event_context.events,
+                &shell_event_context.context,
+                BackendEvent::LogcatFailed { session_id, error },
+            )
+            .await;
+        }
+    }
+}
+
+async fn capture_layout(
+    transport: Arc<dyn AdbTransport>,
+    registry: &DeviceRegistry,
+    request_id: OperationId,
+    target: DeviceTarget,
+    events: mpsc::Sender<BackendEvent>,
+    context: egui::Context,
+) {
+    let Some(record) = registry.current_online(&target) else {
+        let error = stale_target_error(&target);
+        send_event(
+            &events,
+            &context,
+            BackendEvent::LayoutFailed {
+                request_id,
+                target,
+                error,
+            },
+        )
+        .await;
+        return;
+    };
+    let current = record.target();
+    send_event(
+        &events,
+        &context,
+        BackendEvent::LayoutLoading {
+            request_id,
+            target: current.clone(),
+        },
+    )
+    .await;
+    // Spawned: a retried `uiautomator dump` can take tens of seconds on busy
+    // screens and must not stall the control loop.
+    tokio::spawn(async move {
+        let event = match transport.dump_layout(&current.serial).await {
+            Ok(mut snapshot) => {
+                snapshot.target = current.clone();
+                BackendEvent::LayoutCaptured {
+                    request_id,
+                    snapshot,
+                }
+            }
+            Err(error) => BackendEvent::LayoutFailed {
+                request_id,
+                target: current,
+                error,
+            },
+        };
+        send_event(&events, &context, event).await;
+    });
+}
+
+async fn list_webview_sockets(
+    transport: Arc<dyn AdbTransport>,
+    registry: &DeviceRegistry,
+    forwards: Arc<std::sync::Mutex<Vec<u16>>>,
+    request_id: OperationId,
+    target: DeviceTarget,
+    events: mpsc::Sender<BackendEvent>,
+    context: egui::Context,
+) {
+    if registry.current_online(&target).is_none() {
+        let error = stale_target_error(&target);
+        send_event(
+            &events,
+            &context,
+            BackendEvent::WebviewFailed {
+                request_id,
+                target,
+                error,
+            },
+        )
+        .await;
+        return;
+    }
+    send_event(
+        &events,
+        &context,
+        BackendEvent::WebviewSocketsLoading {
+            request_id,
+            target: target.clone(),
+        },
+    )
+    .await;
+    let stale = forwards
+        .lock()
+        .map(|mut ports| std::mem::take(&mut *ports))
+        .unwrap_or_default();
+    for port in stale {
+        let cleanup_transport = Arc::clone(&transport);
+        let cleanup_target = target.clone();
+        tokio::spawn(async move {
+            let _ = cleanup_transport
+                .remove_forward(&cleanup_target.serial, port)
+                .await;
+        });
+    }
+    match transport.list_webview_sockets(&target.serial).await {
+        Ok(sockets) => {
+            send_event(
+                &events,
+                &context,
+                BackendEvent::WebviewSocketsLoaded {
+                    request_id,
+                    target,
+                    sockets,
+                },
+            )
+            .await;
+        }
+        Err(error) => {
+            send_event(
+                &events,
+                &context,
+                BackendEvent::WebviewFailed {
+                    request_id,
+                    target,
+                    error,
+                },
+            )
+            .await;
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn list_webview_pages(
+    transport: Arc<dyn AdbTransport>,
+    registry: &DeviceRegistry,
+    forwards: Arc<std::sync::Mutex<Vec<u16>>>,
+    request_id: OperationId,
+    target: DeviceTarget,
+    socket: String,
+    port: u16,
+    events: mpsc::Sender<BackendEvent>,
+    context: egui::Context,
+) {
+    if registry.current_online(&target).is_none() {
+        let error = stale_target_error(&target);
+        send_event(
+            &events,
+            &context,
+            BackendEvent::WebviewFailed {
+                request_id,
+                target,
+                error,
+            },
+        )
+        .await;
+        return;
+    }
+    send_event(
+        &events,
+        &context,
+        BackendEvent::WebviewPagesLoading {
+            request_id,
+            target: target.clone(),
+            socket: socket.clone(),
+        },
+    )
+    .await;
+    tokio::spawn(async move {
+        if let Err(error) = transport.forward_port(&target.serial, port, &socket).await {
+            send_event(
+                &events,
+                &context,
+                BackendEvent::WebviewFailed {
+                    request_id,
+                    target,
+                    error,
+                },
+            )
+            .await;
+            return;
+        }
+        match fetch_devtools_pages(port).await {
+            Ok(pages) => {
+                if let Ok(mut tracked) = forwards.lock()
+                    && !tracked.contains(&port)
+                {
+                    tracked.push(port);
+                }
+                send_event(
+                    &events,
+                    &context,
+                    BackendEvent::WebviewPagesLoaded {
+                        request_id,
+                        target,
+                        socket,
+                        port,
+                        pages,
+                    },
+                )
+                .await;
+            }
+            Err(error) => {
+                // The forward is useless without a working DevTools endpoint;
+                // drop it so the next attempt starts clean.
+                let _ = transport.remove_forward(&target.serial, port).await;
+                send_event(
+                    &events,
+                    &context,
+                    BackendEvent::WebviewFailed {
+                        request_id,
+                        target,
+                        error,
+                    },
+                )
+                .await;
+            }
+        }
+    });
+}
+
+/// Fetches the DevTools HTTP page list through the forwarded local port.
+/// The forward stays installed so the returned debugger WebSocket URLs keep
+/// working for the UI's "open DevTools" action.
+async fn fetch_devtools_pages(port: u16) -> Result<Vec<WebViewPage>, BridgeError> {
+    #[derive(serde::Deserialize)]
+    struct DevtoolsPage {
+        #[serde(default)]
+        title: String,
+        #[serde(default)]
+        url: String,
+        #[serde(default, rename = "type")]
+        kind: String,
+        #[serde(default, rename = "webSocketDebuggerUrl")]
+        debugger_url: String,
+    }
+
+    let url = format!("http://127.0.0.1:{port}/json/list");
+    let client = reqwest::Client::builder()
+        .timeout(DEVTOOLS_HTTP_TIMEOUT)
+        .build()
+        .map_err(|error| {
+            BridgeError::new(
+                ErrorCode::Internal,
+                "webview.pages_unreachable",
+                error.to_string(),
+            )
+        })?;
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(|error| {
+            BridgeError::new(
+                ErrorCode::AdbFailed,
+                "webview.pages_unreachable",
+                error.to_string(),
+            )
+        })?;
+    let payload: Vec<DevtoolsPage> =
+        response
+            .json::<Vec<DevtoolsPage>>()
+            .await
+            .map_err(|error| {
+                BridgeError::new(
+                    ErrorCode::Internal,
+                    "webview.pages_unreachable",
+                    error.to_string(),
+                )
+            })?;
+    Ok(payload
+        .into_iter()
+        .map(|page| WebViewPage {
+            title: page.title,
+            url: page.url,
+            kind: page.kind,
+            debugger_url: page.debugger_url,
+        })
+        .collect())
+}
+
+fn stale_target_error(target: &DeviceTarget) -> BridgeError {
+    BridgeError::new(
+        ErrorCode::DeviceUnavailable,
+        "device.target_stale",
+        target.serial.redacted(),
+    )
 }
 
 async fn capture_screenshot(
@@ -907,10 +1347,9 @@ async fn initialize_transport(
 
 /// Resolve the AI provider for this session.
 ///
-/// A real provider is constructed from settings once configuration support
-/// lands. Today the runtime advertises a placeholder [`FakeAiProvider`] only in
-/// fake mode, and otherwise reports `AiUnavailable` so the UI shows an explicit
-/// "not configured" state rather than silently calling a default endpoint.
+/// A placeholder [`FakeAiProvider`] is advertised in fake mode; otherwise the
+/// session starts unconfigured and the UI installs a real provider with
+/// [`BackendCommand::ConfigureAi`], which reports `AiReady`/`AiUnavailable`.
 async fn initialize_ai(
     events: &mpsc::Sender<BackendEvent>,
     context: &egui::Context,
@@ -939,6 +1378,61 @@ async fn initialize_ai(
     )
     .await;
     None
+}
+
+/// Install or remove the session's AI provider in response to
+/// [`BackendCommand::ConfigureAi`].
+///
+/// The API key travels only through the command and the provider's in-memory
+/// config; it is never logged and never included in error details.
+async fn configure_ai(
+    provider_slot: &mut Option<Arc<dyn bridgescope_ai::AiProvider>>,
+    settings: Option<bridgescope_domain::AiSettings>,
+    events: &mpsc::Sender<BackendEvent>,
+    context: &egui::Context,
+) {
+    let Some(settings) = settings else {
+        *provider_slot = None;
+        send_event(
+            events,
+            context,
+            BackendEvent::AiUnavailable {
+                reason: "disabled by user".to_owned(),
+            },
+        )
+        .await;
+        return;
+    };
+    let config = bridgescope_ai::AiProviderConfig {
+        kind: bridgescope_ai::OPENAI_COMPATIBLE_KIND.to_owned(),
+        endpoint: settings.endpoint,
+        model: settings.model,
+        auth: bridgescope_ai::AuthTokenSource::Inline {
+            value: settings.api_key,
+        },
+        timeout_seconds: settings.timeout_seconds,
+    };
+    match bridgescope_ai::OpenAiCompatibleProvider::new(config) {
+        Ok(provider) => {
+            let kind = bridgescope_ai::AiProvider::kind(&provider).to_owned();
+            let model = bridgescope_ai::AiProvider::model(&provider).to_owned();
+            info!(kind = %kind, model = %model, "AI provider configured");
+            *provider_slot = Some(Arc::new(provider));
+            send_event(events, context, BackendEvent::AiReady { kind, model }).await;
+        }
+        Err(error) => {
+            *provider_slot = None;
+            warn!(reason = %error, "AI configuration rejected");
+            send_event(
+                events,
+                context,
+                BackendEvent::AiUnavailable {
+                    reason: error.to_string(),
+                },
+            )
+            .await;
+        }
+    }
 }
 
 async fn run_ai_chat(
@@ -1184,6 +1678,278 @@ async fn send_event(
 ) {
     if sender.send(event).await.is_ok() {
         context.request_repaint();
+    }
+}
+
+async fn load_applications(
+    transport: &dyn AdbTransport,
+    registry: &DeviceRegistry,
+    target: DeviceTarget,
+    events: &mpsc::Sender<BackendEvent>,
+    context: &egui::Context,
+) {
+    if registry.current_online(&target).is_none() {
+        send_event(
+            events,
+            context,
+            BackendEvent::ApplicationsFailed {
+                target,
+                error: BridgeError::new(
+                    ErrorCode::DeviceUnavailable,
+                    "device.target_stale",
+                    "selected device is no longer online",
+                ),
+            },
+        )
+        .await;
+        return;
+    }
+    let event_target = target.clone();
+    send_event(
+        events,
+        context,
+        BackendEvent::ApplicationsLoading(target.clone()),
+    )
+    .await;
+    match transport.list_applications(&target.serial).await {
+        Ok(applications) => {
+            send_event(
+                events,
+                context,
+                BackendEvent::ApplicationsLoaded(ApplicationSnapshot {
+                    target: event_target,
+                    applications,
+                }),
+            )
+            .await;
+        }
+        Err(error) => {
+            send_event(
+                events,
+                context,
+                BackendEvent::ApplicationsFailed { target, error },
+            )
+            .await;
+        }
+    }
+}
+
+/// Extracts launcher icons one package at a time; failures are silently
+/// skipped because the grid renders a fallback tile for missing icons.
+/// Concurrent per-package icon requests: each extraction is a half dozen
+/// adb round trips, so serial fetching made the grid trickle in. The
+/// device serializes real work in adbd anyway; this only overlaps the
+/// process spawns, transfers, and host-side parsing.
+const ICON_FETCH_CONCURRENCY: usize = 6;
+
+async fn load_application_icons(
+    transport: &dyn AdbTransport,
+    registry: &DeviceRegistry,
+    target: DeviceTarget,
+    packages: Vec<PackageName>,
+    events: &mpsc::Sender<BackendEvent>,
+    context: &egui::Context,
+) {
+    if registry.current_online(&target).is_none() {
+        return;
+    }
+    futures_util::stream::iter(packages.into_iter().map(|package| async {
+        let icon = transport.application_icon(&target.serial, &package).await;
+        if let Ok(Some(icon)) = icon {
+            send_event(
+                events,
+                context,
+                BackendEvent::ApplicationIconLoaded {
+                    target: target.clone(),
+                    package,
+                    icon,
+                },
+            )
+            .await;
+        }
+    }))
+    .buffer_unordered(ICON_FETCH_CONCURRENCY)
+    .for_each(|()| async {})
+    .await;
+}
+
+async fn load_application_details(
+    transport: &dyn AdbTransport,
+    registry: &DeviceRegistry,
+    request_id: OperationId,
+    target: DeviceTarget,
+    package: PackageName,
+    events: &mpsc::Sender<BackendEvent>,
+    context: &egui::Context,
+) {
+    if registry.current_online(&target).is_none() {
+        send_event(
+            events,
+            context,
+            BackendEvent::ApplicationDetailsFailed {
+                request_id,
+                target,
+                package,
+                error: BridgeError::new(
+                    ErrorCode::DeviceUnavailable,
+                    "device.target_stale",
+                    "selected device is no longer online",
+                ),
+            },
+        )
+        .await;
+        return;
+    }
+    send_event(
+        events,
+        context,
+        BackendEvent::ApplicationDetailsLoading {
+            request_id,
+            target: target.clone(),
+            package: package.clone(),
+        },
+    )
+    .await;
+    match transport
+        .application_details(&target.serial, &package)
+        .await
+    {
+        Ok(details) => {
+            send_event(
+                events,
+                context,
+                BackendEvent::ApplicationDetailsLoaded {
+                    request_id,
+                    details,
+                },
+            )
+            .await;
+        }
+        Err(error) => {
+            send_event(
+                events,
+                context,
+                BackendEvent::ApplicationDetailsFailed {
+                    request_id,
+                    target,
+                    package,
+                    error,
+                },
+            )
+            .await;
+        }
+    }
+}
+
+// One argument per event field; the transport is borrowed like the other
+// handlers.
+#[allow(clippy::too_many_arguments)]
+async fn run_application_action(
+    transport: &dyn AdbTransport,
+    registry: &DeviceRegistry,
+    request_id: OperationId,
+    action: ApplicationAction,
+    target: DeviceTarget,
+    package: PackageName,
+    events: &mpsc::Sender<BackendEvent>,
+    context: &egui::Context,
+) {
+    if registry.current_online(&target).is_none() {
+        send_event(
+            events,
+            context,
+            BackendEvent::ApplicationActionFailed {
+                request_id,
+                action,
+                target,
+                package,
+                error: BridgeError::new(
+                    ErrorCode::DeviceUnavailable,
+                    "device.target_stale",
+                    "selected device is no longer online",
+                ),
+            },
+        )
+        .await;
+        return;
+    }
+    send_event(
+        events,
+        context,
+        BackendEvent::ApplicationActionStarted {
+            request_id,
+            action,
+            target: target.clone(),
+            package: package.clone(),
+        },
+    )
+    .await;
+    let result = perform_application_action(transport, action, &target, &package).await;
+    match result {
+        Ok(()) => {
+            send_event(
+                events,
+                context,
+                BackendEvent::ApplicationActionCompleted {
+                    request_id,
+                    action,
+                    target,
+                    package,
+                },
+            )
+            .await;
+        }
+        Err(error) => {
+            send_event(
+                events,
+                context,
+                BackendEvent::ApplicationActionFailed {
+                    request_id,
+                    action,
+                    target,
+                    package,
+                    error,
+                },
+            )
+            .await;
+        }
+    }
+}
+
+/// Dispatches one package action against the transport.
+async fn perform_application_action(
+    transport: &dyn AdbTransport,
+    action: ApplicationAction,
+    target: &DeviceTarget,
+    package: &PackageName,
+) -> Result<(), BridgeError> {
+    match action {
+        ApplicationAction::Launch => transport.launch_application(&target.serial, package).await,
+        ApplicationAction::ForceStop => {
+            transport
+                .force_stop_application(&target.serial, package)
+                .await
+        }
+        ApplicationAction::ClearData => {
+            transport
+                .clear_application_data(&target.serial, package)
+                .await
+        }
+        ApplicationAction::Freeze => {
+            transport
+                .set_application_frozen(&target.serial, package, true)
+                .await
+        }
+        ApplicationAction::Unfreeze => {
+            transport
+                .set_application_frozen(&target.serial, package, false)
+                .await
+        }
+        ApplicationAction::Uninstall => {
+            transport
+                .uninstall_application(&target.serial, package)
+                .await
+        }
     }
 }
 

@@ -11,15 +11,15 @@ Legend: ✅ implemented, 🚧 active milestone, ⏳ planned, 🧪 experimental.
 | Interactive Shell | ✅ subprocess PTY | ✅ native shell-v2 planned |
 | Screenshot | ✅ | ✅ |
 | AI assistant (provider-neutral) | 🚧 reserved surface | ✅ streaming + real provider |
-| Logcat | ⏳ | ✅ |
+| Logcat | ✅ streaming + filters | ✅ |
 | File management | 🚧 browser + transfer | ✅ |
 | Application management | ⏳ | ✅ |
 | Process monitor | ⏳ | ✅ |
 | Performance metrics | ⏳ | ✅ |
 | scrcpy screen/audio/control | ⏳ | ✅ |
-| Layout inspector | ⏳ | ✅ |
+| Layout inspector | ✅ uiautomator dump + tree | ✅ |
 | Pure Rust Android helper | ⏳ | 🧪 |
-| WebView inspection | ⏳ | ✅ |
+| WebView inspection | ✅ DevTools sockets + page list | ✅ |
 | AVD manager | ⏳ | ✅ |
 
 A visible panel is not considered implemented until its backend, UI states, tests, and real-device acceptance flow pass.

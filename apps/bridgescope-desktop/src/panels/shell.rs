@@ -4,6 +4,8 @@ use bridgescope_domain::{
 };
 use eframe::egui::{self, Color32};
 
+use crate::i18n::{Language, error_text, text};
+
 const INITIAL_TERMINAL_ROWS: u16 = 24;
 const TERMINAL_COLUMNS: u16 = 80;
 const SCROLLBACK_ROWS: usize = 10_000;
@@ -139,19 +141,18 @@ impl ShellPanelState {
 
 pub fn show(
     ui: &mut egui::Ui,
+    language: Language,
     selected: Option<&DeviceRecord>,
     state: &mut ShellPanelState,
 ) -> Vec<BackendCommand> {
     let mut commands = state.reconcile_target(selected);
     ui.horizontal(|ui| {
-        ui.heading("Interactive Shell");
+        ui.heading(text(language, "shell_title"));
         ui.separator();
-        let (label, color) = status_style(state.status);
+        let (label, color) = status_style(language, state.status);
         ui.colored_label(color, label);
     });
-    ui.small(
-        "Expert interface - Android PTY - remote stderr usually merged - panel size set on connect",
-    );
+    ui.small(text(language, "shell_hint"));
     ui.add_space(8.0);
 
     let online = selected.is_some_and(|record| record.descriptor.state.is_online());
@@ -159,7 +160,7 @@ pub fn show(
         if ui
             .add_enabled(
                 online && state.session_id.is_none(),
-                egui::Button::new("Connect"),
+                egui::Button::new(text(language, "connect")),
             )
             .clicked()
             && let Some(command) = state.connect()
@@ -167,19 +168,22 @@ pub fn show(
             commands.push(command);
         }
         if ui
-            .add_enabled(state.session_id.is_some(), egui::Button::new("Close"))
+            .add_enabled(
+                state.session_id.is_some(),
+                egui::Button::new(text(language, "shell_disconnect")),
+            )
             .clicked()
             && let Some(command) = state.close()
         {
             commands.push(command);
         }
-        if ui.button("Clear display").clicked() {
+        if ui.button(text(language, "shell_clear_display")).clicked() {
             state.clear_display();
         }
-        if ui.button("Copy visible").clicked() {
+        if ui.button(text(language, "shell_copy_visible")).clicked() {
             ui.ctx().copy_text(state.parser.screen().contents());
         }
-        if ui.button("Focus terminal").clicked() {
+        if ui.button(text(language, "shell_focus_terminal")).clicked() {
             state.focus_terminal = true;
         }
     });
@@ -187,14 +191,11 @@ pub fn show(
     if !online {
         ui.colored_label(
             Color32::from_rgb(245, 158, 11),
-            "Select an online device before connecting.",
+            text(language, "shell_select_online"),
         );
     }
     if let Some(error) = &state.error {
-        ui.colored_label(
-            Color32::LIGHT_RED,
-            format!("{}: {}", error.message_key, error.detail),
-        );
+        ui.colored_label(Color32::LIGHT_RED, error_text(language, error));
     }
 
     ui.add_space(6.0);
@@ -225,7 +226,13 @@ pub fn show(
             }
         }
     }
-    paint_terminal(ui, rect, state.parser.screen(), response.has_focus());
+    paint_terminal(
+        ui,
+        language,
+        rect,
+        state.parser.screen(),
+        response.has_focus(),
+    );
     commands
 }
 
@@ -421,7 +428,13 @@ fn control_letter(key: egui::Key) -> Option<u8> {
         .and_then(|index| u8::try_from(index + 1).ok())
 }
 
-fn paint_terminal(ui: &egui::Ui, rect: egui::Rect, screen: &vt100::Screen, focused: bool) {
+fn paint_terminal(
+    ui: &egui::Ui,
+    language: Language,
+    rect: egui::Rect,
+    screen: &vt100::Screen,
+    focused: bool,
+) {
     let dark_mode = ui.visuals().dark_mode;
     let background = if dark_mode {
         Color32::from_rgb(14, 17, 22)
@@ -462,7 +475,7 @@ fn paint_terminal(ui: &egui::Ui, rect: egui::Rect, screen: &vt100::Screen, focus
     );
     let contents = screen.contents();
     let text = if contents.is_empty() {
-        "Click Connect, then focus this terminal.".to_owned()
+        text(language, "shell_empty_hint").to_owned()
     } else {
         contents
     };
@@ -494,14 +507,17 @@ fn paint_terminal(ui: &egui::Ui, rect: egui::Rect, screen: &vt100::Screen, focus
     }
 }
 
-fn status_style(status: ShellStatus) -> (&'static str, Color32) {
+fn status_style(language: Language, status: ShellStatus) -> (&'static str, Color32) {
     match status {
-        ShellStatus::Disconnected => ("Disconnected", Color32::GRAY),
-        ShellStatus::Connecting => ("Connecting", Color32::YELLOW),
-        ShellStatus::Connected => ("Connected", Color32::LIGHT_GREEN),
-        ShellStatus::Closing => ("Closing", Color32::YELLOW),
-        ShellStatus::Exited => ("Exited", Color32::GRAY),
-        ShellStatus::Failed => ("Failed", Color32::LIGHT_RED),
+        ShellStatus::Disconnected => (text(language, "shell_status_disconnected"), Color32::GRAY),
+        ShellStatus::Connecting => (text(language, "shell_status_connecting"), Color32::YELLOW),
+        ShellStatus::Connected => (
+            text(language, "shell_status_connected"),
+            Color32::LIGHT_GREEN,
+        ),
+        ShellStatus::Closing => (text(language, "shell_status_closing"), Color32::YELLOW),
+        ShellStatus::Exited => (text(language, "shell_status_exited"), Color32::GRAY),
+        ShellStatus::Failed => (text(language, "shell_status_failed"), Color32::LIGHT_RED),
     }
 }
 

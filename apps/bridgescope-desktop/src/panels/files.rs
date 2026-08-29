@@ -6,6 +6,8 @@ use bridgescope_domain::{
 };
 use eframe::egui;
 
+use crate::i18n::{Language, error_text, text};
+
 #[derive(Clone)]
 struct TransferIntent {
     direction: FileTransferDirection,
@@ -36,13 +38,22 @@ enum SortKey {
     Modified,
 }
 
-fn sort_header(ui: &mut egui::Ui, state: &mut FilesPanelState, key: SortKey, label: &str) {
+fn sort_header(
+    ui: &mut egui::Ui,
+    language: Language,
+    state: &mut FilesPanelState,
+    key: SortKey,
+    label: &str,
+) {
     let arrow = match (state.sort_key == key, state.sort_reverse) {
         (true, false) => " ▼",
         (true, true) => " ▲",
         (false, _) => "",
     };
-    if ui.small_button(format!("{label}{arrow}")).clicked() {
+    if ui
+        .small_button(format!("{}{arrow}", text(language, label)))
+        .clicked()
+    {
         if state.sort_key == key {
             state.sort_reverse = !state.sort_reverse;
         } else {
@@ -100,7 +111,11 @@ impl FilesPanelState {
     }
 
     #[allow(clippy::too_many_lines)]
-    pub fn handle_event(&mut self, event: &BackendEvent) -> Vec<BackendCommand> {
+    pub fn handle_event(
+        &mut self,
+        language: Language,
+        event: &BackendEvent,
+    ) -> Vec<BackendCommand> {
         let mut commands = Vec::new();
         match event {
             BackendEvent::DirectoryLoading {
@@ -137,7 +152,7 @@ impl FilesPanelState {
                 && self.target.as_ref() == Some(target) =>
             {
                 self.loading = false;
-                self.error = Some(format_error(error));
+                self.error = Some(format_error(language, error));
             }
             BackendEvent::FileTransferStarted {
                 request_id, target, ..
@@ -169,7 +184,7 @@ impl FilesPanelState {
                 {
                     self.overwrite_prompt = Some(intent);
                 } else {
-                    self.error = Some(format_error(error));
+                    self.error = Some(format_error(language, error));
                 }
             }
             BackendEvent::FileTransferCancelled { request_id, target }
@@ -204,7 +219,7 @@ impl FilesPanelState {
                 && self.target.as_ref() == Some(target) =>
             {
                 self.mutation = None;
-                self.error = Some(format_error(error));
+                self.error = Some(format_error(language, error));
             }
             _ => {}
         }
@@ -276,8 +291,8 @@ impl FilesPanelState {
     }
 }
 
-fn format_error(error: &BridgeError) -> String {
-    format!("{}: {}", error.message_key, error.detail)
+fn format_error(language: Language, error: &BridgeError) -> String {
+    error_text(language, error)
 }
 
 fn sort_entries(entries: &mut [RemoteFileEntry], key: SortKey, reverse: bool) {
@@ -331,29 +346,30 @@ fn format_modified_time(unix_seconds: i64) -> String {
 #[allow(clippy::too_many_lines)]
 pub fn show(
     ui: &mut egui::Ui,
+    language: Language,
     state: &mut FilesPanelState,
     target: Option<&DeviceTarget>,
 ) -> Vec<BackendCommand> {
     let mut commands = Vec::new();
     let Some(target) = target.cloned() else {
-        ui.centered_and_justified(|ui| ui.label("Select an online device to browse files."));
+        ui.centered_and_justified(|ui| ui.label(text(language, "files_select_device")));
         return commands;
     };
 
     ui.horizontal(|ui| {
-        if ui.button("Back").clicked() {
+        if ui.button(text(language, "files_back")).clicked() {
             if let Some(previous) = state.history.pop() {
                 commands.push(state.list(target.clone(), previous));
             } else if let Some(directory) = state.directory.clone() {
                 commands.push(state.list(target.clone(), directory.parent()));
             }
         }
-        if ui.button("Up").clicked()
+        if ui.button(text(language, "files_up")).clicked()
             && let Some(directory) = state.directory.clone()
         {
             commands.push(state.navigate(target.clone(), directory.parent()));
         }
-        if ui.button("Refresh").clicked()
+        if ui.button(text(language, "refresh")).clicked()
             && let Some(directory) = state.directory.clone()
         {
             commands.push(state.list(target.clone(), directory));
@@ -361,15 +377,18 @@ pub fn show(
         let response =
             ui.add(egui::TextEdit::singleline(&mut state.path_input).desired_width(260.0));
         if (response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)))
-            || ui.button("Go").clicked()
+            || ui.button(text(language, "files_go")).clicked()
         {
             match RemotePath::new(state.path_input.clone()) {
                 Ok(path) => commands.push(state.navigate(target.clone(), path)),
-                Err(error) => state.error = Some(error.to_string()),
+                Err(error) => state.error = Some(format_error(language, &error)),
             }
         }
         if ui
-            .add_enabled(state.mutation.is_none(), egui::Button::new("New folder"))
+            .add_enabled(
+                state.mutation.is_none(),
+                egui::Button::new(text(language, "files_new_folder")),
+            )
             .clicked()
         {
             state.mutation_modal = Some(MutationModal {
@@ -379,10 +398,15 @@ pub fn show(
             });
         }
         if ui
-            .add_enabled(state.transfer.is_none(), egui::Button::new("Upload"))
+            .add_enabled(
+                state.transfer.is_none(),
+                egui::Button::new(text(language, "files_upload")),
+            )
             .clicked()
             && let Some(directory) = state.directory.clone()
-            && let Some(local_path) = rfd::FileDialog::new().set_title("Upload file").pick_file()
+            && let Some(local_path) = rfd::FileDialog::new()
+                .set_title(text(language, "files_upload_dialog"))
+                .pick_file()
         {
             match local_path
                 .file_name()
@@ -400,10 +424,9 @@ pub fn show(
                         OverwritePolicy::Deny,
                     ));
                 }
-                Some(Err(error)) => state.error = Some(error.to_string()),
+                Some(Err(error)) => state.error = Some(format_error(language, &error)),
                 None => {
-                    state.error =
-                        Some("Upload failed: local file name is not valid UTF-8.".to_owned());
+                    state.error = Some(text(language, "files_upload_invalid_name").to_owned());
                 }
             }
         }
@@ -412,11 +435,14 @@ pub fn show(
                 .selected_entry()
                 .is_some_and(|entry| entry.kind == RemoteFileKind::File);
         if ui
-            .add_enabled(can_download, egui::Button::new("Download"))
+            .add_enabled(
+                can_download,
+                egui::Button::new(text(language, "files_download")),
+            )
             .clicked()
             && let Some(entry) = state.selected_entry().cloned()
             && let Some(local_path) = rfd::FileDialog::new()
-                .set_title("Download file")
+                .set_title(text(language, "files_download_dialog"))
                 .set_file_name(&entry.name)
                 .save_file()
         {
@@ -431,7 +457,7 @@ pub fn show(
             ));
         }
         if let Some(request_id) = state.transfer
-            && ui.button("Cancel transfer").clicked()
+            && ui.button(text(language, "files_cancel_transfer")).clicked()
         {
             commands.push(BackendCommand::CancelFileOperation(request_id));
         }
@@ -440,17 +466,17 @@ pub fn show(
     if state.loading {
         ui.horizontal(|ui| {
             ui.spinner();
-            ui.label("Loading…");
+            ui.label(text(language, "files_loading"));
         });
     }
     let mut entries = state.entries.clone();
     sort_entries(&mut entries, state.sort_key, state.sort_reverse);
     egui::ScrollArea::vertical().show(ui, |ui| {
         egui::Grid::new("files-grid").striped(true).show(ui, |ui| {
-            sort_header(ui, state, SortKey::Name, "Name");
-            ui.strong("Type");
-            sort_header(ui, state, SortKey::Size, "Size");
-            sort_header(ui, state, SortKey::Modified, "Modified");
+            sort_header(ui, language, state, SortKey::Name, "files_name");
+            ui.strong(text(language, "files_type"));
+            sort_header(ui, language, state, SortKey::Size, "files_size");
+            sort_header(ui, language, state, SortKey::Modified, "files_modified");
             ui.end_row();
             for (index, entry) in entries.iter().enumerate() {
                 let selected = state.selected == Some(index);
@@ -461,7 +487,11 @@ pub fn show(
                 if response.double_clicked() && entry.kind == RemoteFileKind::Directory {
                     commands.push(state.navigate(target.clone(), entry.path.clone()));
                 }
-                ui.label(format!("{:?}", entry.kind));
+                response.context_menu(|ui| {
+                    state.selected = Some(index);
+                    entry_context_menu(ui, language, state, &mut commands, &target, entry);
+                });
+                ui.label(kind_label(language, entry.kind));
                 ui.label(
                     entry
                         .size_bytes
@@ -482,7 +512,7 @@ pub fn show(
         if ui
             .add_enabled(
                 can_mutate && selected.is_some(),
-                egui::Button::new("Rename"),
+                egui::Button::new(text(language, "files_rename")),
             )
             .clicked()
             && let Some(entry) = selected.clone()
@@ -495,7 +525,10 @@ pub fn show(
         }
         let can_delete = can_mutate && selected.is_some();
         if ui
-            .add_enabled(can_delete, egui::Button::new("Delete"))
+            .add_enabled(
+                can_delete,
+                egui::Button::new(text(language, "files_delete")),
+            )
             .clicked()
         {
             state.mutation_modal = Some(MutationModal {
@@ -511,7 +544,7 @@ pub fn show(
     if state.transfer.is_some() {
         ui.horizontal(|ui| {
             ui.spinner();
-            ui.label("Transferring…");
+            ui.label(text(language, "files_transferring"));
         });
     }
 
@@ -519,15 +552,14 @@ pub fn show(
         let mut open = true;
         let (title, message) = match intent.direction {
             FileTransferDirection::Upload => (
-                "Overwrite remote file?",
-                format!("{} already exists. Replace it?", intent.remote_path),
+                text(language, "files_overwrite_remote_title"),
+                text(language, "files_overwrite_body")
+                    .replace("{}", &intent.remote_path.to_string()),
             ),
             FileTransferDirection::Download => (
-                "Overwrite local file?",
-                format!(
-                    "{} already exists. Replace it?",
-                    intent.local_path.display()
-                ),
+                text(language, "files_overwrite_local_title"),
+                text(language, "files_overwrite_body")
+                    .replace("{}", &intent.local_path.display().to_string()),
             ),
         };
         egui::Window::new(title)
@@ -537,13 +569,13 @@ pub fn show(
             .show(ui.ctx(), |ui| {
                 ui.label(message);
                 ui.horizontal(|ui| {
-                    if ui.button("Replace").clicked() {
+                    if ui.button(text(language, "files_replace")).clicked() {
                         state.overwrite_prompt = None;
                         commands.push(
                             state.start_transfer(intent.clone(), OverwritePolicy::ReplaceConfirmed),
                         );
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(text(language, "cancel")).clicked() {
                         state.overwrite_prompt = None;
                     }
                 });
@@ -556,9 +588,9 @@ pub fn show(
     if let Some(mut modal) = state.mutation_modal.take() {
         let kind = modal.kind;
         let title = match kind {
-            MutationModalKind::CreateDirectory => "New folder",
-            MutationModalKind::Rename => "Rename",
-            MutationModalKind::Delete => "Delete file?",
+            MutationModalKind::CreateDirectory => text(language, "files_new_folder"),
+            MutationModalKind::Rename => text(language, "files_rename"),
+            MutationModalKind::Delete => text(language, "files_delete_title"),
         };
         let mut open = true;
         let mut submitted = false;
@@ -568,15 +600,15 @@ pub fn show(
             .open(&mut open)
             .show(ui.ctx(), |ui| {
                 if matches!(kind, MutationModalKind::Delete) {
-                    ui.label("Delete the selected entry? This cannot be undone.");
+                    ui.label(text(language, "files_delete_body"));
                 } else {
                     ui.add(egui::TextEdit::singleline(&mut modal.input).desired_width(260.0));
                 }
                 ui.horizontal(|ui| {
                     let confirm = if matches!(kind, MutationModalKind::Delete) {
-                        ui.button("Delete").clicked()
+                        ui.button(text(language, "files_delete")).clicked()
                     } else {
-                        ui.button("Confirm").clicked()
+                        ui.button(text(language, "confirm")).clicked()
                     };
                     if confirm {
                         let request_id = OperationId::new();
@@ -614,11 +646,11 @@ pub fn show(
                             commands.push(state.start_mutation(command));
                             submitted = true;
                         } else {
-                            state.error = Some("Invalid remote name or selection.".to_owned());
+                            state.error = Some(text(language, "files_invalid_name").to_owned());
                         }
                     }
                 });
-                if ui.button("Cancel").clicked() {
+                if ui.button(text(language, "cancel")).clicked() {
                     submitted = true;
                 }
             });
@@ -627,6 +659,77 @@ pub fn show(
         }
     }
     commands
+}
+
+/// Row context menu, mirroring the toolbar actions so files can be managed
+/// in place like a desktop file manager.
+fn entry_context_menu(
+    ui: &mut egui::Ui,
+    language: Language,
+    state: &mut FilesPanelState,
+    commands: &mut Vec<BackendCommand>,
+    target: &DeviceTarget,
+    entry: &RemoteFileEntry,
+) {
+    if entry.kind == RemoteFileKind::Directory && ui.button(text(language, "files_enter")).clicked()
+    {
+        commands.push(state.navigate(target.clone(), entry.path.clone()));
+        ui.close();
+    }
+    if entry.kind == RemoteFileKind::File
+        && ui
+            .add_enabled(
+                state.transfer.is_none(),
+                egui::Button::new(text(language, "files_download")),
+            )
+            .clicked()
+        && let Some(local_path) = rfd::FileDialog::new()
+            .set_title(text(language, "files_download_dialog"))
+            .set_file_name(&entry.name)
+            .save_file()
+    {
+        commands.push(state.start_transfer(
+            TransferIntent {
+                direction: FileTransferDirection::Download,
+                target: target.clone(),
+                local_path,
+                remote_path: entry.path.clone(),
+            },
+            OverwritePolicy::Deny,
+        ));
+        ui.close();
+    }
+    if ui.button(text(language, "files_copy_path")).clicked() {
+        ui.ctx().copy_text(entry.path.to_string());
+        ui.close();
+    }
+    if state.mutation.is_none() {
+        if ui.button(text(language, "files_rename")).clicked() {
+            state.mutation_modal = Some(MutationModal {
+                kind: MutationModalKind::Rename,
+                input: entry.name.clone(),
+                entry: Some(entry.clone()),
+            });
+            ui.close();
+        }
+        if ui.button(text(language, "files_delete")).clicked() {
+            state.mutation_modal = Some(MutationModal {
+                kind: MutationModalKind::Delete,
+                input: String::new(),
+                entry: Some(entry.clone()),
+            });
+            ui.close();
+        }
+    }
+}
+
+fn kind_label(language: Language, kind: RemoteFileKind) -> &'static str {
+    match kind {
+        RemoteFileKind::Directory => text(language, "files_kind_directory"),
+        RemoteFileKind::File => text(language, "files_kind_file"),
+        RemoteFileKind::Symlink => text(language, "files_kind_symlink"),
+        RemoteFileKind::Other => text(language, "files_kind_other"),
+    }
 }
 
 #[cfg(test)]

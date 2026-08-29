@@ -6,19 +6,19 @@
 //! authorization that gates which BridgeScope state may be sent to a provider,
 //! and a single [`AiProvider`] trait that concrete backends implement.
 //!
-//! ## Status: reserved surface, not wired to a live provider
+//! ## Status
 //!
-//! No network client is bundled here. A concrete provider (e.g. an
-//! OpenAI-compatible HTTP client or an Anthropic Messages client) is added
-//! later by implementing [`AiProvider`]; the desktop app reads provider
-//! configuration from settings and constructs the matching backend. Until a
-//! real backend is configured the UI surfaces an explicit "AI not configured"
-//! state rather than silently calling a default endpoint.
+//! [`FakeAiProvider`] covers tests and offline development; any
+//! OpenAI-compatible endpoint (OpenAI, DeepSeek, Zhipu GLM, Ollama `/v1`, …)
+//! is served by [`OpenAiCompatibleProvider`], which the desktop app constructs
+//! from settings. Until a backend is configured the UI surfaces an explicit
+//! "AI not configured" state rather than silently calling a default endpoint.
 
 mod authorization;
 mod config;
 mod error;
 mod fake;
+mod openai;
 mod types;
 
 use async_trait::async_trait;
@@ -29,6 +29,7 @@ pub use config::{
 };
 pub use error::AiError;
 pub use fake::FakeAiProvider;
+pub use openai::{KIND as OPENAI_COMPATIBLE_KIND, OpenAiCompatibleProvider};
 pub use types::{
     ChatDelta, ChatFinishReason, ChatMessage, ChatRequest, ChatResponse, ChatRole, DeviceContext,
 };

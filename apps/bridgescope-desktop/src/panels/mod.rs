@@ -1,7 +1,11 @@
+pub mod applications;
 pub mod assistant;
 pub mod files;
+pub mod layout;
+pub mod logcat;
 pub mod overview;
 pub mod performance;
 pub mod processes;
 pub mod screenshot;
 pub mod shell;
+pub mod webview;

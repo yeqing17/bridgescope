@@ -10,6 +10,8 @@ use bridgescope_domain::{
 };
 use eframe::egui::{self, Color32};
 
+use crate::i18n::{Language, error_text, text};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DisplayMode {
     Fit,
@@ -164,20 +166,22 @@ impl ScreenshotPanelState {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn show(
     ui: &mut egui::Ui,
+    language: Language,
     selected: Option<&DeviceRecord>,
     state: &mut ScreenshotPanelState,
 ) -> Vec<BackendCommand> {
     state.reconcile_target(selected);
     let mut commands = Vec::new();
     ui.horizontal(|ui| {
-        ui.heading("Screenshot");
+        ui.heading(text(language, "screenshot"));
         let online = selected.is_some_and(|record| record.descriptor.state.is_online());
         let label = if state.texture.is_some() {
-            "Retake"
+            text(language, "screenshot_retake")
         } else {
-            "Capture"
+            text(language, "screenshot_capture")
         };
         if ui
             .add_enabled(online && !state.loading, egui::Button::new(label))
@@ -187,7 +191,10 @@ pub fn show(
             commands.push(command);
         }
         if ui
-            .add_enabled(state.raw_png.is_some(), egui::Button::new("Save PNG"))
+            .add_enabled(
+                state.raw_png.is_some(),
+                egui::Button::new(text(language, "screenshot_save_png")),
+            )
             .clicked()
             && let Err(error) = state.save_png()
         {
@@ -197,10 +204,21 @@ pub fn show(
                 error.to_string(),
             ));
         }
-        ui.selectable_value(&mut state.display_mode, DisplayMode::Fit, "Fit");
-        ui.selectable_value(&mut state.display_mode, DisplayMode::Actual, "100%");
+        ui.selectable_value(
+            &mut state.display_mode,
+            DisplayMode::Fit,
+            text(language, "screenshot_fit"),
+        );
+        ui.selectable_value(
+            &mut state.display_mode,
+            DisplayMode::Actual,
+            text(language, "screenshot_actual"),
+        );
         if ui
-            .add_enabled(state.color_image.is_some(), egui::Button::new("Copy image"))
+            .add_enabled(
+                state.color_image.is_some(),
+                egui::Button::new(text(language, "screenshot_copy_image")),
+            )
             .clicked()
             && let Some(image) = state.color_image.clone()
         {
@@ -211,26 +229,30 @@ pub fn show(
     if state.loading {
         ui.horizontal(|ui| {
             ui.spinner();
-            ui.label("Capturing and decoding PNG…");
+            ui.label(text(language, "screenshot_capturing"));
         });
     }
     if let Some(error) = &state.error {
-        ui.colored_label(
-            Color32::LIGHT_RED,
-            format!("{}: {}", error.message_key, error.detail),
-        );
+        ui.colored_label(Color32::LIGHT_RED, error_text(language, error));
     }
     if let Some(path) = &state.saved_path {
-        ui.small(format!("Saved to {}", path.display()));
+        ui.small(format!(
+            "{}{}",
+            text(language, "screenshot_saved"),
+            path.display()
+        ));
     }
     if let Some([width, height]) = state.dimensions {
-        ui.small(format!("{width} × {height} pixels"));
+        ui.small(format!(
+            "{width} × {height} {}",
+            text(language, "screenshot_pixels")
+        ));
     }
 
     let Some(texture) = &state.texture else {
         ui.vertical_centered(|ui| {
             ui.add_space(90.0);
-            ui.label("Select an online device and capture its current screen.");
+            ui.label(text(language, "screenshot_hint"));
         });
         return commands;
     };

@@ -8,6 +8,9 @@ rust-version.workspace = true
 [dependencies]
 async-trait.workspace = true
 bridgescope-domain = { path = "../bridgescope-domain" }
+flate2.workspace = true
+image.workspace = true
+quick-xml.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true

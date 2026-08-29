@@ -3,6 +3,7 @@
 mod app;
 mod i18n;
 mod panels;
+mod platform;
 mod runtime;
 mod theme;
 
@@ -20,8 +21,11 @@ fn main() -> eframe::Result<()> {
         .init();
 
     let native_options = eframe::NativeOptions {
+        // Undecorated: the app draws its own title bar (drag to move, window
+        // controls in the top bar) and edge seams for resizing.
         viewport: egui::ViewportBuilder::default()
             .with_title("BridgeScope")
+            .with_decorations(false)
             .with_inner_size([1180.0, 760.0])
             .with_min_inner_size([900.0, 600.0]),
         ..Default::default()

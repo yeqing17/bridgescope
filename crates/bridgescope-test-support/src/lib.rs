@@ -3,9 +3,10 @@ use std::{collections::BTreeMap, path::Path, sync::Arc};
 use async_trait::async_trait;
 use bridgescope_adb::{AdbTransport, ShellOutputChunk, ShellSessionHandle, ShellStream};
 use bridgescope_domain::{
-    AdbEndpoint, BridgeError, DeviceCapabilities, DeviceDescriptor, DeviceOverview, DeviceSerial,
-    DeviceState, ErrorCode, OverwritePolicy, PerformanceMetrics, ProcessInfo, RemoteFileEntry,
-    RemoteFileKind, RemotePath, ShellSize,
+    AdbEndpoint, ApplicationDetails, ApplicationIconData, ApplicationRecord, BridgeError,
+    DeviceCapabilities, DeviceDescriptor, DeviceOverview, DeviceSerial, DeviceState, DeviceTarget,
+    ErrorCode, LayoutSnapshot, OverwritePolicy, PackageName, PerformanceMetrics, ProcessInfo,
+    RemoteFileEntry, RemoteFileKind, RemotePath, ShellSize,
 };
 use image::{ImageEncoder, codecs::png::PngEncoder};
 use tokio::sync::{RwLock, mpsc};
@@ -19,12 +20,19 @@ const FAKE_SHELL_INTERRUPT: &[u8] = b"^C\r\n\x1b[32mfake-device $\x1b[0m ";
 pub struct FakeAdbTransport {
     devices: Arc<RwLock<BTreeMap<DeviceSerial, FakeDevice>>>,
     files: Arc<RwLock<BTreeMap<RemotePath, Option<Vec<u8>>>>>,
+    applications: Arc<RwLock<BTreeMap<String, FakeApplication>>>,
 }
 
 #[derive(Clone, Debug)]
 struct FakeDevice {
     descriptor: DeviceDescriptor,
     overview: DeviceOverview,
+}
+
+#[derive(Clone, Debug)]
+struct FakeApplication {
+    system: bool,
+    disabled: bool,
 }
 
 impl Default for FakeAdbTransport {
@@ -67,6 +75,20 @@ impl Default for FakeAdbTransport {
                 Some("Unicode file\n".as_bytes().to_vec()),
             ),
         ]);
+        let application = |package: &str, system: bool, disabled: bool| {
+            (package.to_owned(), FakeApplication { system, disabled })
+        };
+        let applications = BTreeMap::from([
+            application("com.android.chrome", true, false),
+            application("com.android.settings", true, false),
+            application("com.google.android.gms", true, false),
+            application("com.android.webview", true, true),
+            application("com.bridgescope.demo", false, false),
+            application("com.example.notes", false, false),
+            application("com.example.podcast", false, true),
+            application("org.mozilla.firefox", false, false),
+            application("com.tencent.mm", false, false),
+        ]);
         Self {
             devices: Arc::new(RwLock::new(BTreeMap::from([(
                 serial,
@@ -76,6 +98,7 @@ impl Default for FakeAdbTransport {
                 },
             )]))),
             files: Arc::new(RwLock::new(files)),
+            applications: Arc::new(RwLock::new(applications)),
         }
     }
 }
@@ -128,6 +151,63 @@ impl FakeAdbTransport {
                 ErrorCode::DeviceUnavailable,
                 "device.unavailable",
                 serial.redacted(),
+            ))
+        }
+    }
+
+    /// A deterministic gradient tile so icon-grid layouts render stable
+    /// fixtures; real transports decode the APK's launcher icon instead.
+    #[allow(clippy::unused_self)]
+    fn fake_icon(&self, package: &PackageName) -> ApplicationIconData {
+        let hash = package
+            .as_str()
+            .bytes()
+            .fold(2_166_136_261_u32, |acc, byte| {
+                acc.wrapping_mul(16_777_619).wrapping_add(u32::from(byte))
+            });
+        let (width, height) = (48_u32, 48_u32);
+        let hue_a = hash & 0xFF;
+        let hue_b = (hash >> 8) & 0xFF;
+        let mut rgba = Vec::with_capacity(usize::try_from(width * height).expect("fits") * 4);
+        for row in 0..height {
+            for column in 0..width {
+                let blend = (row + column) * 255 / (width + height - 2);
+                // Blend from hue_a toward hue_b without u32 underflow when
+                // hue_b < hue_a.
+                let value = if hue_b >= hue_a {
+                    hue_a + (hue_b - hue_a) * blend / 255
+                } else {
+                    hue_a - (hue_a - hue_b) * blend / 255
+                };
+                rgba.push(u8::try_from(value).unwrap_or(128));
+                rgba.push(u8::try_from(hue_b).unwrap_or(128));
+                rgba.push(u8::try_from(255 - hue_a).unwrap_or(128));
+                rgba.push(255);
+            }
+        }
+        ApplicationIconData {
+            width,
+            height,
+            rgba,
+        }
+    }
+
+    /// The device must be online and the package installed for an action to
+    /// succeed — mirroring what real `pm`/`am` calls would report.
+    async fn require_application(
+        &self,
+        serial: &DeviceSerial,
+        package: &PackageName,
+    ) -> Result<(), BridgeError> {
+        self.online_device(serial).await?;
+        let applications = self.applications.read().await;
+        if applications.contains_key(package.as_str()) {
+            Ok(())
+        } else {
+            Err(BridgeError::new(
+                ErrorCode::DeviceNotFound,
+                "application.not_found",
+                package.to_string(),
             ))
         }
     }
@@ -274,6 +354,120 @@ impl AdbTransport for FakeAdbTransport {
                 resident_memory_kib: Some(32 * 1024),
             },
         ])
+    }
+
+    async fn list_applications(
+        &self,
+        serial: &DeviceSerial,
+    ) -> Result<Vec<ApplicationRecord>, BridgeError> {
+        self.online_device(serial).await?;
+        let applications = self.applications.read().await;
+        let mut records = applications
+            .iter()
+            .map(|(package, application)| ApplicationRecord {
+                package: PackageName::new(package).expect("fake package names are valid"),
+                system: application.system,
+                disabled: application.disabled,
+            })
+            .collect::<Vec<_>>();
+        records.sort_by(|left, right| {
+            left.system
+                .cmp(&right.system)
+                .then_with(|| left.package.cmp(&right.package))
+        });
+        Ok(records)
+    }
+
+    async fn application_details(
+        &self,
+        serial: &DeviceSerial,
+        package: &PackageName,
+    ) -> Result<ApplicationDetails, BridgeError> {
+        self.online_device(serial).await?;
+        let applications = self.applications.read().await;
+        let Some(application) = applications.get(package.as_str()) else {
+            return Err(BridgeError::new(
+                ErrorCode::DeviceNotFound,
+                "application.not_found",
+                package.to_string(),
+            ));
+        };
+        Ok(ApplicationDetails {
+            package: package.clone(),
+            version_name: Some("1.4.2".to_owned()),
+            version_code: Some(142_003),
+            min_sdk: Some(24),
+            target_sdk: Some(34),
+            first_install_time: Some("2024-01-05 09:12:00".to_owned()),
+            last_update_time: Some("2025-06-30 18:40:11".to_owned()),
+            installer: (!application.system).then(|| "com.android.vending".to_owned()),
+            apk_path: Some(if application.system {
+                format!("/system/app/{}/base.apk", package.as_str())
+            } else {
+                format!("/data/app/~~demo/{}/base.apk", package.as_str())
+            }),
+            permissions: vec![
+                "android.permission.INTERNET".to_owned(),
+                "android.permission.FOREGROUND_SERVICE".to_owned(),
+            ],
+        })
+    }
+
+    async fn launch_application(
+        &self,
+        serial: &DeviceSerial,
+        package: &PackageName,
+    ) -> Result<(), BridgeError> {
+        self.require_application(serial, package).await
+    }
+
+    async fn force_stop_application(
+        &self,
+        serial: &DeviceSerial,
+        package: &PackageName,
+    ) -> Result<(), BridgeError> {
+        self.require_application(serial, package).await
+    }
+
+    async fn clear_application_data(
+        &self,
+        serial: &DeviceSerial,
+        package: &PackageName,
+    ) -> Result<(), BridgeError> {
+        self.require_application(serial, package).await
+    }
+
+    async fn set_application_frozen(
+        &self,
+        serial: &DeviceSerial,
+        package: &PackageName,
+        frozen: bool,
+    ) -> Result<(), BridgeError> {
+        self.require_application(serial, package).await?;
+        let mut applications = self.applications.write().await;
+        if let Some(application) = applications.get_mut(package.as_str()) {
+            application.disabled = frozen;
+        }
+        Ok(())
+    }
+
+    async fn uninstall_application(
+        &self,
+        serial: &DeviceSerial,
+        package: &PackageName,
+    ) -> Result<(), BridgeError> {
+        self.require_application(serial, package).await?;
+        self.applications.write().await.remove(package.as_str());
+        Ok(())
+    }
+
+    async fn application_icon(
+        &self,
+        serial: &DeviceSerial,
+        package: &PackageName,
+    ) -> Result<Option<ApplicationIconData>, BridgeError> {
+        self.require_application(serial, package).await?;
+        Ok(Some(self.fake_icon(package)))
     }
 
     async fn performance_metrics(
@@ -542,6 +736,89 @@ impl AdbTransport for FakeAdbTransport {
             )),
         }
     }
+
+    async fn start_logcat(&self, serial: &DeviceSerial) -> Result<ShellSessionHandle, BridgeError> {
+        self.online_device(serial).await?;
+        Ok(ShellSessionHandle::from_handler(
+            |mut input: mpsc::Receiver<Vec<u8>>,
+             output: mpsc::Sender<ShellOutputChunk>,
+             cancellation: CancellationToken| async move {
+                // A canned "recent log" line set per severity, then the stream
+                // idles until cancelled — mirroring a real logcat session.
+                for line in [
+                    "08-29 10:00:01.100  1000  1000 I ActivityTaskManager: Displayed com.example/.Main",
+                    "08-29 10:00:01.200  1000  1001 D BluetoothAdapter: isLeEnabled(): true",
+                    "08-29 10:00:01.300 10042 10042 W View: requestLayout() improperly called",
+                    "08-29 10:00:01.400  3193  3250 E AndroidRuntime: FATAL EXCEPTION: main",
+                    "08-29 10:00:01.500  3193  3193 V FakeTag: verbose line",
+                ] {
+                    tokio::select! {
+                        () = cancellation.cancelled() => return Ok(Some(0)),
+                        result = send_shell_output(&output, line.as_bytes()) => result?,
+                        () = tokio::time::sleep(std::time::Duration::from_millis(20)) => {}
+                    }
+                }
+                loop {
+                    tokio::select! {
+                        () = cancellation.cancelled() => return Ok(Some(0)),
+                        bytes = input.recv() => {
+                            if bytes.is_none() {
+                                return Ok(Some(0));
+                            }
+                        }
+                    }
+                }
+            },
+        ))
+    }
+
+    async fn dump_layout(&self, serial: &DeviceSerial) -> Result<LayoutSnapshot, BridgeError> {
+        self.online_device(serial).await?;
+        let xml = r#"<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="com.example" bounds="[0,0][1080,2400]">
+    <node index="1" text="BridgeScope" resource-id="com.example:id/title" class="android.widget.TextView" package="com.example" clickable="true" enabled="true" bounds="[24,96][540,192]" />
+    <node index="2" text="" resource-id="" class="android.widget.Button" package="com.example" clickable="true" enabled="false" bounds="[24,200][1056,296]" />
+  </node>
+</hierarchy>"#;
+        let root = bridgescope_adb::parse_hierarchy(xml).map_err(|error| {
+            BridgeError::new(
+                ErrorCode::Internal,
+                "layout.parse_failed",
+                error.to_string(),
+            )
+        })?;
+        Ok(LayoutSnapshot {
+            target: DeviceTarget::new(serial.clone(), 1),
+            root,
+            raw_xml: xml.to_owned(),
+            captured_at_unix_seconds: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        })
+    }
+
+    async fn list_webview_sockets(
+        &self,
+        serial: &DeviceSerial,
+    ) -> Result<Vec<String>, BridgeError> {
+        self.online_device(serial).await?;
+        Ok(vec!["com.android.chrome_devtools_remote".to_owned()])
+    }
+
+    async fn forward_port(
+        &self,
+        serial: &DeviceSerial,
+        _port: u16,
+        _socket: &str,
+    ) -> Result<(), BridgeError> {
+        self.online_device(serial).await
+    }
+
+    async fn remove_forward(&self, serial: &DeviceSerial, _port: u16) -> Result<(), BridgeError> {
+        self.online_device(serial).await
+    }
 }
 
 #[cfg(test)]
@@ -567,6 +844,68 @@ mod tests {
             .is_err()
         );
         assert!(fake.capture_screenshot(&serial).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn fake_applications_support_listing_and_actions() {
+        let fake = FakeAdbTransport::default();
+        let serial = fake_serial();
+
+        let apps = fake
+            .list_applications(&serial)
+            .await
+            .expect("list succeeds");
+        assert!(
+            apps.iter()
+                .any(|app| app.package.as_str() == "com.example.notes" && !app.system)
+        );
+        assert!(apps.iter().any(|app| app.system));
+        assert!(
+            apps.iter()
+                .any(|app| app.package.as_str() == "com.example.podcast" && app.disabled)
+        );
+
+        let package = PackageName::new("com.example.podcast").expect("valid package");
+        fake.set_application_frozen(&serial, &package, false)
+            .await
+            .expect("unfreeze succeeds");
+        let apps = fake
+            .list_applications(&serial)
+            .await
+            .expect("relist succeeds");
+        let podcast = apps
+            .iter()
+            .find(|app| app.package == package)
+            .expect("package still listed");
+        assert!(!podcast.disabled);
+
+        let details = fake
+            .application_details(&serial, &package)
+            .await
+            .expect("details succeed");
+        assert_eq!(details.package, package);
+        assert_eq!(details.version_name.as_deref(), Some("1.4.2"));
+
+        let icon = fake
+            .application_icon(&serial, &package)
+            .await
+            .expect("icon succeeds");
+        let icon = icon.expect("fake icon present");
+        assert_eq!((icon.width, icon.height), (48, 48));
+        assert_eq!(icon.rgba.len(), 48 * 48 * 4);
+        let again = fake
+            .application_icon(&serial, &package)
+            .await
+            .expect("icon succeeds")
+            .expect("fake icon present");
+        assert_eq!(icon.rgba, again.rgba);
+
+        fake.uninstall_application(&serial, &package)
+            .await
+            .expect("uninstall succeeds");
+        assert!(fake.application_icon(&serial, &package).await.is_err());
+        assert!(fake.application_details(&serial, &package).await.is_err());
+        assert!(fake.launch_application(&serial, &package).await.is_err());
     }
 
     #[tokio::test]

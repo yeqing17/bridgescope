@@ -11,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.4.19"
+version = "0.5.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.90"
@@ -20,7 +20,10 @@ repository = "https://github.com/yeqing17/bridgescope"
 [workspace.dependencies]
 async-trait = "0.1.91"
 eframe = { version = "0.33.3", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
-image = { version = "0.25.10", default-features = false, features = ["png"] }
+flate2 = "1.1.9"
+futures-util = { version = "0.3.33", default-features = false, features = ["std"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "webp", "jpeg"] }
+quick-xml = "0.38.3"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 thiserror = "2.0.17"
@@ -30,9 +33,12 @@ tracing = "0.1.44"
 vt100 = "0.16.2"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
 uuid = { version = "1.24.0", features = ["v4", "serde"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# "deny" rather than "forbid": apps/bridgescope-desktop/src/platform.rs is the
+# single, reviewed FFI surface (DWM window chrome) and opts back in locally.
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

@@ -240,7 +240,7 @@ fn collect_input_batch(mut input: Vec<u8>, input_rx: &mut mpsc::Receiver<Vec<u8>
     input
 }
 
-async fn forward_output<R>(
+pub(crate) async fn forward_output<R>(
     mut reader: R,
     stream: ShellStream,
     sender: mpsc::Sender<ShellOutputChunk>,
@@ -275,7 +275,9 @@ where
     }
 }
 
-async fn finish_reader(task: JoinHandle<Result<(), BridgeError>>) -> Result<(), BridgeError> {
+pub(crate) async fn finish_reader(
+    task: JoinHandle<Result<(), BridgeError>>,
+) -> Result<(), BridgeError> {
     match timeout(CLOSE_GRACE, task).await {
         Ok(result) => result.map_err(|error| {
             BridgeError::new(

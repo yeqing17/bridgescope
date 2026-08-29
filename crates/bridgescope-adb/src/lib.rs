@@ -1,7 +1,12 @@
+mod application;
+mod application_icon;
 mod files;
+mod layout;
+mod logcat;
 mod process;
 mod screenshot;
 mod shell;
+mod webview;
 
 use std::{
     collections::HashMap,
@@ -13,12 +18,14 @@ use std::{
 
 use async_trait::async_trait;
 use bridgescope_domain::{
-    AdbEndpoint, BridgeError, DeviceCapabilities, DeviceDescriptor, DeviceOverview, DeviceSerial,
-    DeviceState, ErrorCode, OverwritePolicy, PerformanceMetrics, ProcessInfo, RemoteFileEntry,
+    AdbEndpoint, ApplicationDetails, ApplicationIconData, ApplicationRecord, BridgeError,
+    DeviceCapabilities, DeviceDescriptor, DeviceOverview, DeviceSerial, DeviceState, ErrorCode,
+    LayoutSnapshot, OverwritePolicy, PackageName, PerformanceMetrics, ProcessInfo, RemoteFileEntry,
     RemotePath, ShellSize,
 };
 use tokio_util::sync::CancellationToken;
 
+pub use layout::parse_hierarchy;
 pub use shell::{ShellOutputChunk, ShellSessionHandle, ShellStream};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(8);
@@ -98,6 +105,49 @@ pub trait AdbTransport: Send + Sync {
     async fn connect_endpoint(&self, endpoint: &AdbEndpoint) -> Result<String, BridgeError>;
     async fn device_overview(&self, serial: &DeviceSerial) -> Result<DeviceOverview, BridgeError>;
     async fn list_processes(&self, serial: &DeviceSerial) -> Result<Vec<ProcessInfo>, BridgeError>;
+    async fn list_applications(
+        &self,
+        serial: &DeviceSerial,
+    ) -> Result<Vec<ApplicationRecord>, BridgeError>;
+    async fn application_details(
+        &self,
+        serial: &DeviceSerial,
+        package: &PackageName,
+    ) -> Result<ApplicationDetails, BridgeError>;
+    async fn launch_application(
+        &self,
+        serial: &DeviceSerial,
+        package: &PackageName,
+    ) -> Result<(), BridgeError>;
+    async fn force_stop_application(
+        &self,
+        serial: &DeviceSerial,
+        package: &PackageName,
+    ) -> Result<(), BridgeError>;
+    async fn clear_application_data(
+        &self,
+        serial: &DeviceSerial,
+        package: &PackageName,
+    ) -> Result<(), BridgeError>;
+    async fn set_application_frozen(
+        &self,
+        serial: &DeviceSerial,
+        package: &PackageName,
+        frozen: bool,
+    ) -> Result<(), BridgeError>;
+    async fn uninstall_application(
+        &self,
+        serial: &DeviceSerial,
+        package: &PackageName,
+    ) -> Result<(), BridgeError>;
+    /// Best-effort launcher icon; `Ok(None)` means "no extractable icon"
+    /// (device offline, parse failure, unsupported resource shape, …) and
+    /// the UI falls back to a generated tile.
+    async fn application_icon(
+        &self,
+        serial: &DeviceSerial,
+        package: &PackageName,
+    ) -> Result<Option<ApplicationIconData>, BridgeError>;
     async fn performance_metrics(
         &self,
         serial: &DeviceSerial,
@@ -145,6 +195,23 @@ pub trait AdbTransport: Send + Sync {
         serial: &DeviceSerial,
         path: &RemotePath,
     ) -> Result<(), BridgeError>;
+    /// Opens a streaming `logcat` session; the returned handle behaves like a
+    /// shell handle (output channel, cancellation) and lives until dropped.
+    async fn start_logcat(&self, serial: &DeviceSerial) -> Result<ShellSessionHandle, BridgeError>;
+    /// Dumps the active window's view hierarchy via `uiautomator`.
+    async fn dump_layout(&self, serial: &DeviceSerial) -> Result<LayoutSnapshot, BridgeError>;
+    /// Lists abstract sockets whose names mention `devtools_remote`.
+    async fn list_webview_sockets(&self, serial: &DeviceSerial)
+    -> Result<Vec<String>, BridgeError>;
+    /// Forwards a local TCP port to a device abstract socket.
+    async fn forward_port(
+        &self,
+        serial: &DeviceSerial,
+        port: u16,
+        socket: &str,
+    ) -> Result<(), BridgeError>;
+    /// Removes a previously installed local TCP forward.
+    async fn remove_forward(&self, serial: &DeviceSerial, port: u16) -> Result<(), BridgeError>;
 }
 
 #[derive(Clone, Debug)]
@@ -306,6 +373,117 @@ impl AdbTransport for ProcessAdbTransport {
         parse_processes(&output)
     }
 
+    async fn list_applications(
+        &self,
+        serial: &DeviceSerial,
+    ) -> Result<Vec<ApplicationRecord>, BridgeError> {
+        let third_party = self.shell(serial, application::LIST_THIRD_PARTY).await?;
+        let system = self.shell(serial, application::LIST_SYSTEM).await?;
+        // `-d` is only a decoration on top of the two required filters; an
+        // error there must not blind the whole listing.
+        let disabled = self
+            .optional_shell(serial, application::LIST_DISABLED)
+            .await
+            .unwrap_or_default();
+        Ok(application::parse_applications(
+            &third_party,
+            &system,
+            &disabled,
+        ))
+    }
+
+    async fn application_details(
+        &self,
+        serial: &DeviceSerial,
+        package: &PackageName,
+    ) -> Result<ApplicationDetails, BridgeError> {
+        let output = self
+            .shell(serial, &["dumpsys", "package", package.as_str()])
+            .await?;
+        Ok(application::parse_application_details(package, &output))
+    }
+
+    async fn launch_application(
+        &self,
+        serial: &DeviceSerial,
+        package: &PackageName,
+    ) -> Result<(), BridgeError> {
+        // monkey exits non-zero (with a `** Error:` message) when the package
+        // has no launcher activity, so the exit-code check in `run` doubles
+        // as the launchability check.
+        self.shell(
+            serial,
+            &[
+                "monkey",
+                "-p",
+                package.as_str(),
+                "-c",
+                "android.intent.category.LAUNCHER",
+                "1",
+            ],
+        )
+        .await
+        .map(|_| ())
+    }
+
+    async fn force_stop_application(
+        &self,
+        serial: &DeviceSerial,
+        package: &PackageName,
+    ) -> Result<(), BridgeError> {
+        self.shell(serial, &["am", "force-stop", package.as_str()])
+            .await
+            .map(|_| ())
+    }
+
+    async fn clear_application_data(
+        &self,
+        serial: &DeviceSerial,
+        package: &PackageName,
+    ) -> Result<(), BridgeError> {
+        self.shell(serial, &["pm", "clear", package.as_str()])
+            .await
+            .map(|_| ())
+    }
+
+    async fn set_application_frozen(
+        &self,
+        serial: &DeviceSerial,
+        package: &PackageName,
+        frozen: bool,
+    ) -> Result<(), BridgeError> {
+        let command: &[&str] = if frozen {
+            &["pm", "disable-user", "--user", "0", package.as_str()]
+        } else {
+            &["pm", "enable", package.as_str()]
+        };
+        self.shell(serial, command).await.map(|_| ())
+    }
+
+    async fn uninstall_application(
+        &self,
+        serial: &DeviceSerial,
+        package: &PackageName,
+    ) -> Result<(), BridgeError> {
+        // Uninstall for the current user only: works for system apps too,
+        // where a full uninstall would be refused without root.
+        self.shell(
+            serial,
+            &["pm", "uninstall", "--user", "0", package.as_str()],
+        )
+        .await
+        .map(|_| ())
+    }
+
+    async fn application_icon(
+        &self,
+        serial: &DeviceSerial,
+        package: &PackageName,
+    ) -> Result<Option<ApplicationIconData>, BridgeError> {
+        application_icon::extract_application_icon(&self.executable, serial, package, self.timeout)
+            .await
+    }
+
     async fn performance_metrics(
         &self,
         serial: &DeviceSerial,
@@ -419,6 +597,34 @@ impl AdbTransport for ProcessAdbTransport {
         path: &RemotePath,
     ) -> Result<(), BridgeError> {
         files::delete_file(&self.executable, serial, path, self.timeout).await
+    }
+
+    async fn start_logcat(&self, serial: &DeviceSerial) -> Result<ShellSessionHandle, BridgeError> {
+        logcat::start_logcat(self.executable.clone(), serial)
+    }
+
+    async fn dump_layout(&self, serial: &DeviceSerial) -> Result<LayoutSnapshot, BridgeError> {
+        layout::dump_layout(&self.executable, serial, self.timeout).await
+    }
+
+    async fn list_webview_sockets(
+        &self,
+        serial: &DeviceSerial,
+    ) -> Result<Vec<String>, BridgeError> {
+        webview::list_devtools_sockets(&self.executable, serial, self.timeout).await
+    }
+
+    async fn forward_port(
+        &self,
+        serial: &DeviceSerial,
+        port: u16,
+        socket: &str,
+    ) -> Result<(), BridgeError> {
+        webview::forward_port(&self.executable, serial, port, socket, self.timeout).await
+    }
+
+    async fn remove_forward(&self, serial: &DeviceSerial, port: u16) -> Result<(), BridgeError> {
+        webview::remove_forward(&self.executable, serial, port, self.timeout).await
     }
 }
 
