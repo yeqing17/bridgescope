@@ -356,7 +356,7 @@ dependencies = [
 
 [[package]]
 name = "bridgescope-adb"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "bridgescope-domain",
@@ -370,7 +370,7 @@ dependencies = [
 
 [[package]]
 name = "bridgescope-ai"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "bridgescope-domain",
@@ -384,14 +384,14 @@ dependencies = [
 
 [[package]]
 name = "bridgescope-application"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "bridgescope-domain",
 ]
 
 [[package]]
 name = "bridgescope-desktop"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "bridgescope-adb",
  "bridgescope-ai",
@@ -416,7 +416,7 @@ dependencies = [
 
 [[package]]
 name = "bridgescope-device"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "bridgescope-adb",
  "bridgescope-domain",
@@ -424,7 +424,7 @@ dependencies = [
 
 [[package]]
 name = "bridgescope-domain"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -434,14 +434,14 @@ dependencies = [
 
 [[package]]
 name = "bridgescope-scrcpy"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "bridgescope-domain",
 ]
 
 [[package]]
 name = "bridgescope-test-support"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "bridgescope-adb",

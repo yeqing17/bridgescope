@@ -2,7 +2,7 @@
 
 BridgeScope is an independently implemented, pure-Rust desktop toolkit for inspecting and managing Android devices through ADB.
 
-> Status: **0.5.0.** Fifteen panels ship: ADB discovery and diagnostics, explicit device selection (USB and network), device overview, interactive shell, binary-safe screenshots, a provider-neutral AI assistant, remote file management, application management, process and performance monitors, live Logcat, a layout inspector, and WebView inspection. The roadmap (APK install, AVD manager, wireless debugging, scrcpy mirroring) is tracked in [`docs/feature-matrix.md`](docs/feature-matrix.md). File deletion is restricted to regular files; directory deletion is intentionally unavailable.
+> Status: **0.6.0.** Panels ship: ADB discovery and diagnostics, explicit device selection (USB and network), device overview, interactive shell, binary-safe screenshots, a provider-neutral AI assistant, remote file management, application management with APK install, process and performance monitors, live Logcat, a layout inspector, WebView inspection, an AVD manager (launch/stop emulators), and wireless debugging (pairing, TCP mode, mDNS discovery) in the device manager. The remaining roadmap (scrcpy mirroring, screen recording) is tracked in [`docs/feature-matrix.md`](docs/feature-matrix.md). File deletion is restricted to regular files; directory deletion is intentionally unavailable.
 
 ## Goals
 
