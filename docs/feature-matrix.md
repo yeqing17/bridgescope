@@ -9,7 +9,7 @@ subprocess transport) instead of the original protocol-level ambitions.
 A visible panel is not considered implemented until its backend, UI states,
 tests, and real-device acceptance flow pass.
 
-## Status (0.6.0)
+## Status (0.7.0)
 
 | Area | Status | Notes |
 |---|---|---|
@@ -31,7 +31,7 @@ tests, and real-device acceptance flow pass.
 | WebView inspection | ✅ | DevTools sockets, page list, inspector URL |
 | AVD manager | ✅ | list via SDK emulator, launch (± wipe-data), running state, `emu kill` stop with confirm |
 | Wireless debugging | ✅ | `adb pair` with code, `tcpip 5555` for the selected device, mDNS discovery with connect; note: running-AVD detection needs a genuine SDK emulator console |
-| scrcpy screen mirror | ⏳ | phase 2 of the roadmap below |
+| scrcpy screen mirror | ✅ | video-only forward-tunnel mirror of the selected device: adjustable max size / bitrate, pinned scrcpy server 3.3.4, openh264 decode to an egui texture, one mirror at a time, stop on device-side exit |
 | AI streaming responses | ⏳ | SSE on the reserved provider surface |
 | Screen recording | 🧪 | evaluate after mirroring ships |
 | Pure Rust Android helper | ❌ | descoped, see roadmap |
@@ -55,14 +55,17 @@ All three items shipped in 0.6.0 on the existing subprocess transport.
    discovery (`adb mdns services`) with connect buttons, all inside the
    device-manager window.
 
-### Phase 2 — 0.7: scrcpy phase 1 (video mirror)
+### Phase 2 — 0.7: scrcpy phase 1 (video mirror) — DONE
 
-- Spike first: H.264 decoder choice (static openh264 build vs. ffmpeg sidecar),
-  plus the scrcpy protocol version and doc links, recorded in
+Shipped in 0.7.0:
+
+- Decoder spike resolved to the `openh264` crate (bundled OpenH264 C sources, no
+  external binary); protocol version, artifact hash, and doc links recorded in
   `docs/protocol-sources.md` per the clean-room policy before any protocol byte
-  is implemented.
-- Ship: device screen mirroring with adjustable max size / bitrate rendered to
-  an egui texture, one mirror at a time per device.
+  was implemented.
+- Device screen mirroring with adjustable max size / bitrate rendered to an
+  egui texture, one mirror at a time per device; the stop path covers both the
+  button and the device-side server dying (forward removed, UI reset).
 - Explicitly out of phase 1: control injection and audio.
 
 ### Phase 3 — later

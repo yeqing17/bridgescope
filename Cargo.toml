@@ -11,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.90"
@@ -23,7 +23,9 @@ eframe = { version = "0.33.3", default-features = false, features = ["default_fo
 flate2 = "1.1.9"
 futures-util = { version = "0.3.33", default-features = false, features = ["std"] }
 image = { version = "0.25.10", default-features = false, features = ["png", "webp", "jpeg"] }
+openh264 = "0.9.8"
 quick-xml = "0.38.3"
+sha2 = "0.10.9"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 thiserror = "2.0.17"
