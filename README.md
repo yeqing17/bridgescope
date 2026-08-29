@@ -2,7 +2,7 @@
 
 BridgeScope is an independently implemented, pure-Rust desktop toolkit for inspecting and managing Android devices through ADB.
 
-> Status: **0.4 early development.** The current milestone provides ADB discovery, explicit device selection, a device overview, an interactive Android shell, binary-safe screenshots, a provider-neutral AI assistant surface, and a remote file manager with explicit transfer confirmation and cancellation. File deletion is restricted to regular files; directory deletion is intentionally unavailable. Other panels remain roadmap placeholders.
+> Status: **0.5.0.** Fifteen panels ship: ADB discovery and diagnostics, explicit device selection (USB and network), device overview, interactive shell, binary-safe screenshots, a provider-neutral AI assistant, remote file management, application management, process and performance monitors, live Logcat, a layout inspector, and WebView inspection. The roadmap (APK install, AVD manager, wireless debugging, scrcpy mirroring) is tracked in [`docs/feature-matrix.md`](docs/feature-matrix.md). File deletion is restricted to regular files; directory deletion is intentionally unavailable.
 
 ## Goals
 
@@ -54,6 +54,10 @@ cargo build --workspace --release
 - **Processes:** reads an online device's process table through ADB, showing PID, process name, user, state, CPU, memory, and resident memory. The snapshot refreshes every three seconds while the panel is visible and can also be refreshed manually.
 - **Performance:** samples CPU usage, load average, memory, storage, and battery metrics once per second while the panel is visible. The panel keeps the latest 60 samples and renders CPU, memory, and battery history as a lightweight chart.
 - **Network devices:** the Device Manager accepts an Android device host/IP and port directly through adb connect, keeps up to eight successful endpoints as local history, and allows reconnecting or forgetting saved endpoints. Device discovery runs once at startup and again only after an explicit refresh or network connection.
+- **Applications:** lists installed packages with launcher icons, shows package details (version, installer, permissions), and supports launch, force stop, clear data, freeze/unfreeze, and uninstall — every destructive action requires explicit confirmation.
+- **Logcat:** streams `logcat -v threadtime` live with per-level colors, severity and text filters, pause, autoscroll, and save-to-file. The stream starts automatically when the panel is opened and survives device switches.
+- **Layout inspector:** captures the foreground window hierarchy via `uiautomator dump`, renders it as a searchable view tree with per-node attributes, copyable node dumps, and XML export.
+- **WebView inspection:** discovers WebView DevTools sockets on the device, forwards a local port, lists debuggable pages, and opens them in the browser or the Chrome DevTools frontend.
 
 ## Safety
 
