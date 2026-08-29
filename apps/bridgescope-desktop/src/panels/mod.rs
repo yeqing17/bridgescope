@@ -1,5 +1,6 @@
 pub mod applications;
 pub mod assistant;
+pub mod avd;
 pub mod files;
 pub mod layout;
 pub mod logcat;

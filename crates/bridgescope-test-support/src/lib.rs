@@ -5,8 +5,8 @@ use bridgescope_adb::{AdbTransport, ShellOutputChunk, ShellSessionHandle, ShellS
 use bridgescope_domain::{
     AdbEndpoint, ApplicationDetails, ApplicationIconData, ApplicationRecord, BridgeError,
     DeviceCapabilities, DeviceDescriptor, DeviceOverview, DeviceSerial, DeviceState, DeviceTarget,
-    ErrorCode, LayoutSnapshot, OverwritePolicy, PackageName, PerformanceMetrics, ProcessInfo,
-    RemoteFileEntry, RemoteFileKind, RemotePath, ShellSize,
+    ErrorCode, LayoutSnapshot, MdnsService, OverwritePolicy, PackageName, PerformanceMetrics,
+    ProcessInfo, RemoteFileEntry, RemoteFileKind, RemotePath, ShellSize,
 };
 use image::{ImageEncoder, codecs::png::PngEncoder};
 use tokio::sync::{RwLock, mpsc};
@@ -826,6 +826,42 @@ impl AdbTransport for FakeAdbTransport {
         _apk_path: &std::path::Path,
     ) -> Result<(), BridgeError> {
         self.online_device(serial).await
+    }
+
+    async fn list_avds(&self) -> Result<Vec<String>, BridgeError> {
+        Ok(vec!["Fake_Pixel_9a".to_owned(), "Fake_Tablet".to_owned()])
+    }
+
+    async fn launch_avd(&self, _name: &str, _wipe_data: bool) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn running_avd_name(&self, serial: &DeviceSerial) -> Result<Option<String>, BridgeError> {
+        self.online_device(serial).await?;
+        Ok((serial.as_str().starts_with("emulator-")).then(|| "Fake_Pixel_9a".to_owned()))
+    }
+
+    async fn kill_emulator(&self, serial: &DeviceSerial) -> Result<(), BridgeError> {
+        self.online_device(serial).await
+    }
+
+    async fn pair_device(&self, host: &str, _port: u16, code: &str) -> Result<(), BridgeError> {
+        if host.trim().is_empty() || !(6..=8).contains(&code.len()) {
+            return Err(BridgeError::invalid_input("wireless.pair_invalid"));
+        }
+        Ok(())
+    }
+
+    async fn enable_tcpip(&self, serial: &DeviceSerial, _port: u16) -> Result<(), BridgeError> {
+        self.online_device(serial).await
+    }
+
+    async fn mdns_services(&self) -> Result<Vec<MdnsService>, BridgeError> {
+        Ok(vec![MdnsService {
+            name: "Fake_Pixel_9a".to_owned(),
+            service_type: "_adb-tls-connect._tcp".to_owned(),
+            address: "192.168.1.20:5555".to_owned(),
+        }])
     }
 }
 

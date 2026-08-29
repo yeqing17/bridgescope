@@ -9,12 +9,12 @@ use eframe::egui::{self, Color32, RichText};
 use crate::{
     i18n::{Language, text},
     panels::{
-        applications, assistant, files, layout, logcat, overview, performance, processes,
+        applications, assistant, avd, files, layout, logcat, overview, performance, processes,
         screenshot, shell, webview,
     },
     platform,
     runtime::RuntimeBridge,
-    theme,
+    theme, wireless,
 };
 
 const RECENT_ENDPOINTS_STORAGE_KEY: &str = "bridgescope.recent_adb_endpoints";
@@ -33,10 +33,11 @@ enum Panel {
     Screenshot,
     Logcat,
     WebView,
+    Avd,
 }
 
 impl Panel {
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 11] = [
         Self::Overview,
         Self::Files,
         Self::Applications,
@@ -47,6 +48,7 @@ impl Panel {
         Self::Screenshot,
         Self::Logcat,
         Self::WebView,
+        Self::Avd,
     ];
 
     const fn key(self) -> &'static str {
@@ -61,6 +63,7 @@ impl Panel {
             Self::Screenshot => "screenshot",
             Self::Logcat => "logcat",
             Self::WebView => "webview",
+            Self::Avd => "avd",
         }
     }
 }
@@ -94,6 +97,10 @@ pub struct BridgeScopeApp {
     logcat: logcat::LogcatPanelState,
     layout: layout::LayoutPanelState,
     webview: webview::WebviewPanelState,
+    /// Host-scoped (no device selection): lists and launches AVDs.
+    avd: avd::AvdPanelState,
+    /// Wireless-debugging section of the device-manager window.
+    wireless: wireless::WirelessState,
     last_process_refresh: Option<Instant>,
     last_performance_refresh: Option<Instant>,
     last_application_load: Option<Instant>,
@@ -139,6 +146,8 @@ impl BridgeScopeApp {
             logcat: logcat::LogcatPanelState::default(),
             layout: layout::LayoutPanelState::default(),
             webview: webview::WebviewPanelState::default(),
+            avd: avd::AvdPanelState::default(),
+            wireless: wireless::WirelessState::default(),
             last_process_refresh: None,
             last_performance_refresh: None,
             last_application_load: None,
@@ -175,6 +184,10 @@ impl BridgeScopeApp {
             if std::env::var("BRIDGESCOPE_ASSISTANT").as_deref() == Ok("2") {
                 app.assistant.seed_demo_transcript();
             }
+        }
+        // Dev hook for screenshots: open the device-manager window at start.
+        if std::env::var_os("BRIDGESCOPE_DEVICES").is_some() {
+            app.windows.devices = true;
         }
         // Same idea for panel screenshots: `BRIDGESCOPE_PANEL=applications`
         // starts on that panel (values are the panel i18n keys).
@@ -214,6 +227,11 @@ impl BridgeScopeApp {
             self.logcat.handle_event(&event);
             self.layout.handle_event(&event);
             self.webview.handle_event(&event);
+            let avd_commands = self.avd.handle_event(&event);
+            for command in avd_commands {
+                self.send(command);
+            }
+            self.wireless.handle_event(&event);
             match event {
                 BackendEvent::AdbReady { path, version } => {
                     self.adb_path = Some(path);
@@ -292,7 +310,10 @@ impl BridgeScopeApp {
                 | BackendEvent::ApplicationsFailed { error, .. }
                 | BackendEvent::ApplicationDetailsFailed { error, .. }
                 | BackendEvent::ApplicationActionFailed { error, .. }
-                | BackendEvent::ApkInstallFailed { error, .. } => {
+                | BackendEvent::ApkInstallFailed { error, .. }
+                | BackendEvent::AvdsFailed { error }
+                | BackendEvent::AvdLaunchFailed { error, .. }
+                | BackendEvent::EmulatorKillFailed { error, .. } => {
                     self.last_error = Some(error);
                 }
                 BackendEvent::OperationFailed(error) => {
@@ -335,6 +356,15 @@ impl BridgeScopeApp {
                 | BackendEvent::ApplicationIconLoaded { .. }
                 | BackendEvent::ApkInstallLoading { .. }
                 | BackendEvent::ApkInstallFinished { .. }
+                | BackendEvent::AvdsLoaded { .. }
+                | BackendEvent::AvdLaunchFinished { .. }
+                | BackendEvent::EmulatorKillFinished { .. }
+                | BackendEvent::PairFinished { .. }
+                | BackendEvent::PairFailed { .. }
+                | BackendEvent::TcpIpEnabled { .. }
+                | BackendEvent::TcpIpFailed { .. }
+                | BackendEvent::MdnsServicesLoaded { .. }
+                | BackendEvent::MdnsFailed { .. }
                 | BackendEvent::ScreenshotLoading { .. }
                 | BackendEvent::ScreenshotCaptured { .. }
                 | BackendEvent::ScreenshotFailed { .. }
@@ -643,6 +673,7 @@ impl BridgeScopeApp {
                     Panel::Logcat => logcat::show(ui, self.language, &mut self.logcat),
                     Panel::Layout => layout::show(ui, self.language, &mut self.layout),
                     Panel::WebView => webview::show(ui, self.language, &mut self.webview),
+                    Panel::Avd => avd::show(ui, self.language, &mut self.avd),
                 };
                 for command in commands {
                     self.send(command);
@@ -719,6 +750,12 @@ impl BridgeScopeApp {
             && let Some(command) = webview::auto_refresh(&mut self.webview, target_online)
         {
             self.send(command);
+        }
+        if self.active_panel == Panel::Avd {
+            // Host-scoped: boot/settle polling and the first load on open.
+            for command in avd::auto(&mut self.avd) {
+                self.send(command);
+            }
         }
     }
 
@@ -822,6 +859,7 @@ impl BridgeScopeApp {
         self.windows.ai_settings = open;
     }
 
+    #[allow(clippy::too_many_lines)]
     fn device_manager(&mut self, context: &egui::Context) {
         let mut open = self.windows.devices;
         egui::Window::new(text(self.language, "device_manager"))
@@ -861,6 +899,20 @@ impl BridgeScopeApp {
                         ui.spinner();
                         ui.label(format!("{} {endpoint}…", text(self.language, "connecting")));
                     });
+                }
+                // Wireless debugging: pairing, tcpip mode, mDNS discovery.
+                let selected_serial = self.snapshot.selected.clone();
+                let (wireless_commands, wireless_connect) = wireless::show(
+                    ui,
+                    self.language,
+                    &mut self.wireless,
+                    selected_serial.as_ref(),
+                );
+                for command in wireless_commands {
+                    self.send(command);
+                }
+                if let Some(endpoint) = wireless_connect {
+                    self.connect_endpoint(endpoint);
                 }
                 if !self.recent_endpoints.is_empty() {
                     ui.separator();
@@ -963,6 +1015,9 @@ impl eframe::App for BridgeScopeApp {
         }
         self.central_panel(context);
         if self.windows.devices {
+            for command in wireless::auto(&mut self.wireless) {
+                self.send(command);
+            }
             self.device_manager(context);
         }
         if self.windows.ai_settings {
@@ -1141,9 +1196,10 @@ mod tests {
 
     #[test]
     fn all_expected_panels_are_present() {
-        assert_eq!(Panel::ALL.len(), 10);
+        assert_eq!(Panel::ALL.len(), 11);
         assert_eq!(Panel::ALL[0], Panel::Overview);
         assert_eq!(Panel::ALL[9], Panel::WebView);
+        assert_eq!(Panel::ALL[10], Panel::Avd);
     }
 
     #[test]

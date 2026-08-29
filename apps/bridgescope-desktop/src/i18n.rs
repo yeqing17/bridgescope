@@ -259,6 +259,41 @@ pub fn text(language: Language, key: &str) -> &'static str {
         (Language::Chinese, "applications_install") => "安装 APK…",
         (Language::Chinese, "applications_install_running") => "正在安装 APK…",
         (Language::Chinese, "applications_install_ok") => "APK 安装成功",
+        (Language::Chinese, "avd") => "模拟器",
+        (Language::Chinese, "avd_name") => "名称",
+        (Language::Chinese, "avd_status") => "状态",
+        (Language::Chinese, "avd_running") => "运行中",
+        (Language::Chinese, "avd_stopped") => "已停止",
+        (Language::Chinese, "avd_launch") => "启动",
+        (Language::Chinese, "avd_launch_hint") => "启动该模拟器",
+        (Language::Chinese, "avd_launch_wipe") => "清空数据启动",
+        (Language::Chinese, "avd_launch_wipe_hint") => "清除应用数据并冷启动",
+        (Language::Chinese, "avd_stop") => "停止",
+        (Language::Chinese, "avd_none") => "未发现模拟器。请确认已安装 Android SDK 模拟器。",
+        (Language::Chinese, "avd_starting") => "正在启动模拟器…",
+        (Language::Chinese, "avd_started_hint") => "模拟器已启动，等待设备上线…",
+        (Language::Chinese, "avd_kill_done") => "模拟器已停止",
+        (Language::Chinese, "avd_hint") => {
+            "列表来自 emulator -list-avds；启动后的设备会自动出现在设备列表中。"
+        }
+        (Language::Chinese, "wireless") => "无线调试",
+        (Language::Chinese, "wireless_hint") => "支持配对、切换无线模式与发现局域网调试服务。",
+        (Language::Chinese, "wireless_pair") => "配对地址",
+        (Language::Chinese, "wireless_pair_go") => "配对",
+        (Language::Chinese, "wireless_pairing") => "正在配对…",
+        (Language::Chinese, "wireless_pair_ok") => "配对成功，请用设备 IP 连接。",
+        (Language::Chinese, "wireless_code") => "配对码",
+        (Language::Chinese, "wireless_tcpip") => "无线模式",
+        (Language::Chinese, "wireless_tcpip_running") => "正在切换到无线模式…",
+        (Language::Chinese, "wireless_tcpip_ok") => "已切换到无线模式，请用设备 IP 连接。",
+        (Language::Chinese, "wireless_tcpip_hint") => {
+            "将当前设备切换到网络调试（端口 5555），随后用设备 IP 连接。"
+        }
+        (Language::Chinese, "wireless_tcpip_need_device") => "请先选择一个设备",
+        (Language::Chinese, "wireless_mdns") => "发现设备",
+        (Language::Chinese, "wireless_mdns_hint") => "列出局域网内正在广播的调试服务。",
+        (Language::Chinese, "wireless_connect") => "连接",
+        (Language::Chinese, "wireless_none") => "未发现调试服务。",
         (Language::Chinese, "adb.cancelled") => "操作已取消",
         (Language::Chinese, "adb.command_failed") => "ADB 命令执行失败",
         (Language::Chinese, "adb.devices.invalid_line") => "ADB 设备列表格式异常",
@@ -313,6 +348,18 @@ pub fn text(language: Language, key: &str) -> &'static str {
         (Language::Chinese, "webview.forward_failed") => "建立端口转发失败",
         (Language::Chinese, "webview.pages_unreachable") => "无法访问 DevTools 调试接口",
         (Language::Chinese, "applications.install_failed") => "APK 安装失败",
+        (Language::Chinese, "avd.emulator_missing") => {
+            "未找到 emulator 程序，请确认 Android SDK 路径"
+        }
+        (Language::Chinese, "avd.list_failed") => "获取模拟器列表失败",
+        (Language::Chinese, "avd.launch_failed") => "启动模拟器失败",
+        (Language::Chinese, "avd.kill_failed") => "停止模拟器失败",
+        (Language::Chinese, "adb.pair_failed") => "无线配对失败",
+        (Language::Chinese, "adb.tcpip_failed") => "切换无线模式失败",
+        (Language::Chinese, "adb.mdns_failed") => "发现调试服务失败",
+        (Language::Chinese, "wireless.pair_invalid") => {
+            "配对信息无效：请检查地址、端口与配对码（6–8 位数字）"
+        }
         (Language::Chinese, "device.target_stale") => "设备已不在线，请刷新后重试",
         (_, "overview") => "Overview",
         (_, "files") => "Files",
@@ -519,6 +566,42 @@ forwards are cleaned up when the service list refreshes."
         (_, "applications_install") => "Install APK…",
         (_, "applications_install_running") => "Installing APK…",
         (_, "applications_install_ok") => "APK installed",
+        (_, "avd") => "Emulators",
+        (_, "avd_name") => "Name",
+        (_, "avd_status") => "Status",
+        (_, "avd_running") => "Running",
+        (_, "avd_stopped") => "Stopped",
+        (_, "avd_launch") => "Launch",
+        (_, "avd_launch_hint") => "Start this emulator",
+        (_, "avd_launch_wipe") => "Launch wiped",
+        (_, "avd_launch_wipe_hint") => "Cold boot with user data cleared",
+        (_, "avd_stop") => "Stop",
+        (_, "avd_none") => "No emulators found. Make sure the Android SDK emulator is installed.",
+        (_, "avd_starting") => "Starting emulator…",
+        (_, "avd_started_hint") => "Emulator launched; waiting for the device to come online…",
+        (_, "avd_kill_done") => "Emulator stopped",
+        (_, "avd_hint") => {
+            "Listed by emulator -list-avds; launched devices appear in the device list \
+automatically."
+        }
+        (_, "wireless") => "Wireless debugging",
+        (_, "wireless_hint") => "Pair, switch to wireless mode, and discover LAN debug services.",
+        (_, "wireless_pair") => "Pair address",
+        (_, "wireless_pair_go") => "Pair",
+        (_, "wireless_pairing") => "Pairing…",
+        (_, "wireless_pair_ok") => "Paired; now connect with the device IP.",
+        (_, "wireless_code") => "Pairing code",
+        (_, "wireless_tcpip") => "Wireless mode",
+        (_, "wireless_tcpip_running") => "Switching to wireless mode…",
+        (_, "wireless_tcpip_ok") => "Switched to wireless mode; connect with the device IP.",
+        (_, "wireless_tcpip_hint") => {
+            "Switch the current device to network adb (port 5555), then connect by device IP."
+        }
+        (_, "wireless_tcpip_need_device") => "Select a device first",
+        (_, "wireless_mdns") => "Discover",
+        (_, "wireless_mdns_hint") => "Lists the debug services currently advertised on the LAN.",
+        (_, "wireless_connect") => "Connect",
+        (_, "wireless_none") => "No debug services discovered.",
         (_, "performance_live_hint") => "Samples every second, keeps the last 60 seconds",
         (_, "performance_waiting") => "Collecting performance data…",
         (_, "no_processes") => "No processes returned",
@@ -815,6 +898,43 @@ mod tests {
         "applications_install_ok",
     ];
 
+    const AVD_KEYS: &[&str] = &[
+        "avd",
+        "avd_name",
+        "avd_status",
+        "avd_running",
+        "avd_stopped",
+        "avd_launch",
+        "avd_launch_hint",
+        "avd_launch_wipe",
+        "avd_launch_wipe_hint",
+        "avd_stop",
+        "avd_none",
+        "avd_starting",
+        "avd_started_hint",
+        "avd_kill_done",
+        "avd_hint",
+    ];
+
+    const WIRELESS_KEYS: &[&str] = &[
+        "wireless",
+        "wireless_hint",
+        "wireless_pair",
+        "wireless_pair_go",
+        "wireless_pairing",
+        "wireless_pair_ok",
+        "wireless_code",
+        "wireless_tcpip",
+        "wireless_tcpip_running",
+        "wireless_tcpip_ok",
+        "wireless_tcpip_hint",
+        "wireless_tcpip_need_device",
+        "wireless_mdns",
+        "wireless_mdns_hint",
+        "wireless_connect",
+        "wireless_none",
+    ];
+
     #[test]
     fn files_screenshot_shell_keys_translate_for_both_languages() {
         for language in [Language::English, Language::Chinese] {
@@ -826,6 +946,8 @@ mod tests {
                 .chain(LAYOUT_KEYS)
                 .chain(WEBVIEW_KEYS)
                 .chain(APPLICATIONS_KEYS)
+                .chain(AVD_KEYS)
+                .chain(WIRELESS_KEYS)
                 .chain(["refresh", "confirm", "cancel", "connect", "copy"].iter())
             {
                 assert!(
@@ -848,6 +970,13 @@ mod tests {
         "adb.stdout_missing",
         "adb.timed_out",
         "adb.wait_failed",
+        "adb.mdns_failed",
+        "adb.pair_failed",
+        "adb.tcpip_failed",
+        "avd.emulator_missing",
+        "avd.kill_failed",
+        "avd.launch_failed",
+        "avd.list_failed",
         "device.generation_changed",
         "device.not_found",
         "device.unavailable",
@@ -892,6 +1021,7 @@ mod tests {
         "webview.pages_unreachable",
         "applications.install_failed",
         "device.target_stale",
+        "wireless.pair_invalid",
     ];
 
     #[test]

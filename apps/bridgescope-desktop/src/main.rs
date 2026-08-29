@@ -6,6 +6,7 @@ mod panels;
 mod platform;
 mod runtime;
 mod theme;
+mod wireless;
 
 use app::BridgeScopeApp;
 use eframe::egui;

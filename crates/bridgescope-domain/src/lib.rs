@@ -402,6 +402,23 @@ pub struct ApplicationSnapshot {
     pub applications: Vec<ApplicationRecord>,
 }
 
+/// One AVD from the SDK emulator, annotated with the serial of the emulator
+/// currently running it, if any.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AvdEntry {
+    pub name: String,
+    pub running_serial: Option<DeviceSerial>,
+}
+
+/// One wireless-debugging service advertised over mDNS, as reported by
+/// `adb mdns services`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct MdnsService {
+    pub name: String,
+    pub service_type: String,
+    pub address: String,
+}
+
 /// Best-effort details for one application, parsed from `dumpsys package`.
 ///
 /// No `Default`: an empty [`PackageName`] would be invalid by construction.
@@ -1024,6 +1041,36 @@ pub enum BackendCommand {
         target: DeviceTarget,
         apk_path: PathBuf,
     },
+    /// List the AVDs known to the SDK emulator, annotated with the serial of
+    /// a running emulator for each, if any.
+    ListAvds,
+    /// Spawn an emulator for the named AVD; boot completion arrives through
+    /// the regular device list.
+    LaunchAvd {
+        request_id: OperationId,
+        name: String,
+        wipe_data: bool,
+    },
+    /// Ask the emulator behind a serial to exit through its console.
+    KillEmulator {
+        request_id: OperationId,
+        serial: DeviceSerial,
+    },
+    /// Pair with a wireless-debugging device using its pairing code.
+    PairDevice {
+        request_id: OperationId,
+        host: String,
+        port: u16,
+        code: String,
+    },
+    /// Switch a USB-connected device to TCP listening mode.
+    EnableTcpIp {
+        request_id: OperationId,
+        serial: DeviceSerial,
+        port: u16,
+    },
+    /// List the wireless-debugging services currently advertised via mDNS.
+    ListMdnsServices,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1110,6 +1157,52 @@ pub enum BackendEvent {
     ApkInstallFailed {
         request_id: OperationId,
         target: DeviceTarget,
+        error: BridgeError,
+    },
+    AvdsLoaded {
+        avds: Vec<AvdEntry>,
+    },
+    AvdsFailed {
+        error: BridgeError,
+    },
+    AvdLaunchFinished {
+        request_id: OperationId,
+        name: String,
+    },
+    AvdLaunchFailed {
+        request_id: OperationId,
+        name: String,
+        error: BridgeError,
+    },
+    EmulatorKillFinished {
+        request_id: OperationId,
+        serial: DeviceSerial,
+    },
+    EmulatorKillFailed {
+        request_id: OperationId,
+        serial: DeviceSerial,
+        error: BridgeError,
+    },
+    PairFinished {
+        request_id: OperationId,
+    },
+    PairFailed {
+        request_id: OperationId,
+        error: BridgeError,
+    },
+    TcpIpEnabled {
+        request_id: OperationId,
+        serial: DeviceSerial,
+    },
+    TcpIpFailed {
+        request_id: OperationId,
+        serial: DeviceSerial,
+        error: BridgeError,
+    },
+    MdnsServicesLoaded {
+        services: Vec<MdnsService>,
+    },
+    MdnsFailed {
         error: BridgeError,
     },
     OperationFailed(BridgeError),
