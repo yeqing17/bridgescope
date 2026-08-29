@@ -819,6 +819,14 @@ impl AdbTransport for FakeAdbTransport {
     async fn remove_forward(&self, serial: &DeviceSerial, _port: u16) -> Result<(), BridgeError> {
         self.online_device(serial).await
     }
+
+    async fn install_apk(
+        &self,
+        serial: &DeviceSerial,
+        _apk_path: &std::path::Path,
+    ) -> Result<(), BridgeError> {
+        self.online_device(serial).await
+    }
 }
 
 #[cfg(test)]

@@ -6,7 +6,9 @@
 
 use std::collections::BTreeMap;
 
-use bridgescope_domain::{ApplicationDetails, ApplicationRecord, PackageName};
+use bridgescope_domain::{
+    ApplicationDetails, ApplicationRecord, BridgeError, DeviceSerial, ErrorCode, PackageName,
+};
 
 /// `pm list packages -3`: third-party packages only.
 pub const LIST_THIRD_PARTY: &[&str] = &["pm", "list", "packages", "-3"];
@@ -160,6 +162,58 @@ fn non_empty(value: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
+/// Installs are streamed to the device and can legitimately take minutes on a
+/// cold device or a slow Wi-Fi connection, so this command gets its own
+/// generous bound instead of the transport-wide 8 second default.
+const INSTALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Installs (or replaces) a package from a host APK via `adb install -r`.
+pub async fn install_apk(
+    executable: &std::path::Path,
+    serial: &DeviceSerial,
+    apk_path: &std::path::Path,
+    max_output_bytes: usize,
+) -> Result<(), BridgeError> {
+    let output = crate::process::run_bounded(
+        executable,
+        vec![
+            std::ffi::OsString::from("-s"),
+            std::ffi::OsString::from(serial.as_str()),
+            std::ffi::OsString::from("install"),
+            std::ffi::OsString::from("-r"),
+            std::ffi::OsString::from(apk_path.as_os_str()),
+        ],
+        INSTALL_TIMEOUT,
+        max_output_bytes,
+        max_output_bytes,
+    )
+    .await?;
+    install_result(&output)
+}
+
+/// Judges one `adb install` run by its well-known textual result: adb prints
+/// `Success` or `Failure [reason]` regardless of the process exit status.
+fn install_result(output: &crate::process::ProcessOutput) -> Result<(), BridgeError> {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if stdout.lines().any(|line| line.trim() == "Success") {
+        return Ok(());
+    }
+    let detail = stdout
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("Failure").map(str::to_owned))
+        .or_else(|| {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let trimmed = stderr.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_owned())
+        })
+        .unwrap_or_else(|| format!("adb exited with {:?}", output.exit_code));
+    Err(BridgeError::new(
+        ErrorCode::AdbFailed,
+        "applications.install_failed",
+        detail,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,5 +299,94 @@ mod tests {
         let package = PackageName::new("com.example.app").expect("valid package");
         let details = parse_application_details(&package, "DUMP OF SERVICE package:\n(empty)\n");
         assert_eq!(details, empty_details(&package));
+    }
+
+    fn install_output(
+        stdout: &str,
+        stderr: &str,
+        exit_code: Option<i32>,
+    ) -> crate::process::ProcessOutput {
+        crate::process::ProcessOutput {
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: stderr.as_bytes().to_vec(),
+            exit_code,
+        }
+    }
+
+    #[test]
+    fn install_accepts_success_line() {
+        let output = install_output("Performing Streamed Install\nSuccess\n", "", Some(0));
+        assert!(install_result(&output).is_ok());
+    }
+
+    #[test]
+    fn install_surfaces_the_failure_reason() {
+        let output = install_output(
+            "Performing Streamed Install\nFailure [INSTALL_FAILED_ALREADY_EXISTS]\n",
+            "",
+            Some(1),
+        );
+        let error = install_result(&output).expect_err("must fail");
+        assert_eq!(error.message_key, "applications.install_failed");
+        assert!(error.detail.contains("INSTALL_FAILED_ALREADY_EXISTS"));
+    }
+
+    #[test]
+    fn install_falls_back_to_stderr_then_exit_code() {
+        let silent = install_output("", "", Some(1));
+        assert!(install_result(&silent).is_err());
+        let noisy = install_output("", "adb: no devices/emulators found", Some(1));
+        let error = install_result(&noisy).expect_err("must fail");
+        assert!(error.detail.contains("no devices"));
+    }
+
+    /// Real-device acceptance: pulls an already-installed APK and reinstalls
+    /// it in place. Ignored by default; run with `-- --ignored` plus
+    /// `BRIDGESCOPE_REAL_DEVICE_TEST=1` and an online device.
+    #[tokio::test]
+    #[ignore = "requires a real adb device"]
+    async fn install_roundtrip_reinstalls_a_pulled_apk() {
+        use crate::AdbTransport;
+        if std::env::var_os("BRIDGESCOPE_REAL_DEVICE_TEST").is_none() {
+            return;
+        }
+        let executable = std::env::var_os("BRIDGESCOPE_ADB")
+            .expect("BRIDGESCOPE_ADB must point at adb")
+            .into();
+        let transport = crate::ProcessAdbTransport::new(executable);
+        let serial = transport
+            .list_devices()
+            .await
+            .expect("device list")
+            .into_iter()
+            .find(|device| device.state.is_online())
+            .expect("an online device")
+            .serial;
+        let remote = transport
+            .shell(&serial, &["pm", "path", "com.android.browser"])
+            .await
+            .expect("package path");
+        let apk = remote
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("package:"))
+            .expect("a package: line")
+            .to_owned();
+        let local = std::env::temp_dir().join("bridgescope-install-test.apk");
+        let remote_path = bridgescope_domain::RemotePath::new(apk).expect("valid remote path");
+        transport
+            .pull_file(
+                &serial,
+                &remote_path,
+                &local,
+                bridgescope_domain::OverwritePolicy::ReplaceConfirmed,
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .await
+            .expect("pull apk");
+        transport
+            .install_apk(&serial, &local)
+            .await
+            .expect("reinstall succeeds");
+        let _ = std::fs::remove_file(&local);
     }
 }

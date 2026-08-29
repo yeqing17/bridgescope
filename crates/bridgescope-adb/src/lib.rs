@@ -212,6 +212,8 @@ pub trait AdbTransport: Send + Sync {
     ) -> Result<(), BridgeError>;
     /// Removes a previously installed local TCP forward.
     async fn remove_forward(&self, serial: &DeviceSerial, port: u16) -> Result<(), BridgeError>;
+    /// Installs an APK from the host filesystem (`adb install -r`).
+    async fn install_apk(&self, serial: &DeviceSerial, apk_path: &Path) -> Result<(), BridgeError>;
 }
 
 #[derive(Clone, Debug)]
@@ -625,6 +627,10 @@ impl AdbTransport for ProcessAdbTransport {
 
     async fn remove_forward(&self, serial: &DeviceSerial, port: u16) -> Result<(), BridgeError> {
         webview::remove_forward(&self.executable, serial, port, self.timeout).await
+    }
+
+    async fn install_apk(&self, serial: &DeviceSerial, apk_path: &Path) -> Result<(), BridgeError> {
+        application::install_apk(&self.executable, serial, apk_path, self.max_output_bytes).await
     }
 }
 

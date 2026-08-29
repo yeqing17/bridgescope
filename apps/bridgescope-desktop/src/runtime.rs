@@ -400,6 +400,22 @@ async fn run_backend(
                         )
                         .await;
                     }
+                    BackendCommand::InstallApk {
+                        request_id,
+                        target,
+                        apk_path,
+                    } => {
+                        install_apk(
+                            transport.clone(),
+                            &registry,
+                            request_id,
+                            target,
+                            apk_path,
+                            events.clone(),
+                            context.clone(),
+                        )
+                        .await;
+                    }
                     BackendCommand::ListWebviewSockets { request_id, target } => {
                         list_webview_sockets(
                             transport.clone(),
@@ -637,6 +653,57 @@ async fn capture_layout(
                 }
             }
             Err(error) => BackendEvent::LayoutFailed {
+                request_id,
+                target: current,
+                error,
+            },
+        };
+        send_event(&events, &context, event).await;
+    });
+}
+
+async fn install_apk(
+    transport: Arc<dyn AdbTransport>,
+    registry: &DeviceRegistry,
+    request_id: OperationId,
+    target: DeviceTarget,
+    apk_path: std::path::PathBuf,
+    events: mpsc::Sender<BackendEvent>,
+    context: egui::Context,
+) {
+    let Some(record) = registry.current_online(&target) else {
+        let error = stale_target_error(&target);
+        send_event(
+            &events,
+            &context,
+            BackendEvent::ApkInstallFailed {
+                request_id,
+                target,
+                error,
+            },
+        )
+        .await;
+        return;
+    };
+    let current = record.target();
+    send_event(
+        &events,
+        &context,
+        BackendEvent::ApkInstallLoading {
+            request_id,
+            target: current.clone(),
+        },
+    )
+    .await;
+    // Spawned: a streamed install can run for minutes and must not stall the
+    // control loop.
+    tokio::spawn(async move {
+        let event = match transport.install_apk(&current.serial, &apk_path).await {
+            Ok(()) => BackendEvent::ApkInstallFinished {
+                request_id,
+                target: current,
+            },
+            Err(error) => BackendEvent::ApkInstallFailed {
                 request_id,
                 target: current,
                 error,

@@ -1018,6 +1018,12 @@ pub enum BackendCommand {
         socket: String,
         port: u16,
     },
+    /// Install an APK file from the host filesystem (`adb install -r`).
+    InstallApk {
+        request_id: OperationId,
+        target: DeviceTarget,
+        apk_path: PathBuf,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1092,6 +1098,19 @@ pub enum BackendEvent {
         target: DeviceTarget,
         package: PackageName,
         icon: ApplicationIconData,
+    },
+    ApkInstallLoading {
+        request_id: OperationId,
+        target: DeviceTarget,
+    },
+    ApkInstallFinished {
+        request_id: OperationId,
+        target: DeviceTarget,
+    },
+    ApkInstallFailed {
+        request_id: OperationId,
+        target: DeviceTarget,
+        error: BridgeError,
     },
     OperationFailed(BridgeError),
     ShellOpened {

@@ -291,7 +291,8 @@ impl BridgeScopeApp {
                 | BackendEvent::PerformanceFailed { error, .. }
                 | BackendEvent::ApplicationsFailed { error, .. }
                 | BackendEvent::ApplicationDetailsFailed { error, .. }
-                | BackendEvent::ApplicationActionFailed { error, .. } => {
+                | BackendEvent::ApplicationActionFailed { error, .. }
+                | BackendEvent::ApkInstallFailed { error, .. } => {
                     self.last_error = Some(error);
                 }
                 BackendEvent::OperationFailed(error) => {
@@ -332,6 +333,8 @@ impl BridgeScopeApp {
                 | BackendEvent::ApplicationActionStarted { .. }
                 | BackendEvent::ApplicationActionCompleted { .. }
                 | BackendEvent::ApplicationIconLoaded { .. }
+                | BackendEvent::ApkInstallLoading { .. }
+                | BackendEvent::ApkInstallFinished { .. }
                 | BackendEvent::ScreenshotLoading { .. }
                 | BackendEvent::ScreenshotCaptured { .. }
                 | BackendEvent::ScreenshotFailed { .. }

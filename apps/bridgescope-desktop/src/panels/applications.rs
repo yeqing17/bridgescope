@@ -38,6 +38,10 @@ pub struct ApplicationsPanelState {
     pub details: Option<ApplicationDetails>,
     pub details_loading: bool,
     pending: Option<PendingAction>,
+    /// An APK install in flight, matched back by request id.
+    install: Option<OperationId>,
+    /// A transient success notice; cleared when the refreshed list arrives.
+    pub install_notice: bool,
     /// A destructive action awaiting confirmation (clear data, uninstall).
     pub confirm: Option<ApplicationAction>,
     /// Decoded launcher icons received from the transport, keyed by package.
@@ -58,6 +62,8 @@ impl ApplicationsPanelState {
             self.details = None;
             self.details_loading = false;
             self.pending = None;
+            self.install = None;
+            self.install_notice = false;
             self.confirm = None;
             self.loading = false;
             self.icons.clear();
@@ -78,6 +84,7 @@ impl ApplicationsPanelState {
                 if self.target.as_ref() == Some(&snapshot.target) =>
             {
                 self.loading = false;
+                self.install_notice = false;
                 self.applications.clone_from(&snapshot.applications);
                 // The selection may have vanished (uninstalled, or its record
                 // no longer matches); drop it so the details pane follows.
@@ -145,6 +152,23 @@ impl ApplicationsPanelState {
                     self.pending = None;
                 }
             }
+            BackendEvent::ApkInstallFinished { request_id, target }
+                if self.install.as_ref() == Some(request_id)
+                    && self.target.as_ref() == Some(target) =>
+            {
+                self.install = None;
+                self.install_notice = true;
+                // The freshly installed package should show up right away.
+                if let Some(current) = self.target.clone() {
+                    self.loading = true;
+                    commands.push(BackendCommand::LoadApplications(current));
+                }
+            }
+            BackendEvent::ApkInstallFailed { request_id, .. }
+                if self.install.as_ref() == Some(request_id) =>
+            {
+                self.install = None;
+            }
             _ => {}
         }
         commands
@@ -204,6 +228,7 @@ impl ApplicationsPanelState {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn show(
     ui: &mut egui::Ui,
     language: Language,
@@ -214,11 +239,42 @@ pub fn show(
 
     ui.horizontal(|ui| {
         ui.heading(text(language, "applications"));
-        if state.loading {
+        if state.loading || state.install.is_some() {
             ui.spinner();
         }
+        if state.install.is_some() {
+            ui.label(text(language, "applications_install_running"));
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .add_enabled(
+                    state.target.is_some() && state.install.is_none(),
+                    egui::Button::new(text(language, "applications_install")),
+                )
+                .clicked()
+                && let Some(path) = rfd::FileDialog::new()
+                    .add_filter("APK", &["apk"])
+                    .pick_file()
+                && let Some(target) = state.target.clone()
+            {
+                let request_id = OperationId::new();
+                state.install = Some(request_id);
+                state.install_notice = false;
+                commands.push(BackendCommand::InstallApk {
+                    request_id,
+                    target,
+                    apk_path: path,
+                });
+            }
+        });
     });
     ui.small(text(language, "applications_hint"));
+    if state.install_notice {
+        ui.label(
+            RichText::new(text(language, "applications_install_ok"))
+                .color(egui::Color32::from_rgb(74, 222, 128)),
+        );
+    }
     ui.add_space(6.0);
 
     if state.target.is_none() {
@@ -1034,6 +1090,53 @@ mod tests {
 
         assert!(commands.is_empty());
         assert!(state.pending.is_none());
+    }
+
+    #[test]
+    fn finishing_an_install_sets_the_notice_and_reloads() {
+        let mut state = ApplicationsPanelState::default();
+        let device = device_target();
+        state.reset_for(Some(device.clone()));
+        let request_id = OperationId::new();
+        state.install = Some(request_id);
+
+        let commands = state.handle_event(&BackendEvent::ApkInstallFinished {
+            request_id,
+            target: device,
+        });
+
+        assert_eq!(commands.len(), 1);
+        assert!(matches!(commands[0], BackendCommand::LoadApplications(_)));
+        assert!(state.install.is_none());
+        assert!(state.install_notice);
+        // The refreshed listing clears the notice again.
+        state.handle_event(&BackendEvent::ApplicationsLoading(
+            state.target.clone().expect("target"),
+        ));
+        let loaded = BackendEvent::ApplicationsLoaded(bridgescope_domain::ApplicationSnapshot {
+            target: state.target.clone().expect("target"),
+            applications: Vec::new(),
+        });
+        state.handle_event(&loaded);
+        assert!(!state.install_notice);
+    }
+
+    #[test]
+    fn failing_an_install_clears_the_pending_marker() {
+        let mut state = ApplicationsPanelState::default();
+        let device = device_target();
+        state.reset_for(Some(device.clone()));
+        let request_id = OperationId::new();
+        state.install = Some(request_id);
+
+        state.handle_event(&BackendEvent::ApkInstallFailed {
+            request_id,
+            target: device,
+            error: bridgescope_domain::BridgeError::invalid_input("test"),
+        });
+
+        assert!(state.install.is_none());
+        assert!(!state.install_notice);
     }
 
     #[test]

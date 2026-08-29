@@ -256,6 +256,9 @@ pub fn text(language: Language, key: &str) -> &'static str {
         (Language::Chinese, "webview_debug_hint") => {
             "调试器通过本地端口转发（DevTools 协议）在浏览器中打开；转发会在刷新服务列表时自动清理。"
         }
+        (Language::Chinese, "applications_install") => "安装 APK…",
+        (Language::Chinese, "applications_install_running") => "正在安装 APK…",
+        (Language::Chinese, "applications_install_ok") => "APK 安装成功",
         (Language::Chinese, "adb.cancelled") => "操作已取消",
         (Language::Chinese, "adb.command_failed") => "ADB 命令执行失败",
         (Language::Chinese, "adb.devices.invalid_line") => "ADB 设备列表格式异常",
@@ -309,6 +312,7 @@ pub fn text(language: Language, key: &str) -> &'static str {
         (Language::Chinese, "logcat.wait_failed") => "等待日志进程退出失败",
         (Language::Chinese, "webview.forward_failed") => "建立端口转发失败",
         (Language::Chinese, "webview.pages_unreachable") => "无法访问 DevTools 调试接口",
+        (Language::Chinese, "applications.install_failed") => "APK 安装失败",
         (Language::Chinese, "device.target_stale") => "设备已不在线，请刷新后重试",
         (_, "overview") => "Overview",
         (_, "files") => "Files",
@@ -512,6 +516,9 @@ setWebContentsDebuggingEnabled(true) and run an active WebView/browser."
             "DevTools opens in your browser through a local port forward (DevTools protocol); \
 forwards are cleaned up when the service list refreshes."
         }
+        (_, "applications_install") => "Install APK…",
+        (_, "applications_install_running") => "Installing APK…",
+        (_, "applications_install_ok") => "APK installed",
         (_, "performance_live_hint") => "Samples every second, keeps the last 60 seconds",
         (_, "performance_waiting") => "Collecting performance data…",
         (_, "no_processes") => "No processes returned",
@@ -802,6 +809,12 @@ mod tests {
         "webview_debug_hint",
     ];
 
+    const APPLICATIONS_KEYS: &[&str] = &[
+        "applications_install",
+        "applications_install_running",
+        "applications_install_ok",
+    ];
+
     #[test]
     fn files_screenshot_shell_keys_translate_for_both_languages() {
         for language in [Language::English, Language::Chinese] {
@@ -812,6 +825,7 @@ mod tests {
                 .chain(LOGCAT_KEYS)
                 .chain(LAYOUT_KEYS)
                 .chain(WEBVIEW_KEYS)
+                .chain(APPLICATIONS_KEYS)
                 .chain(["refresh", "confirm", "cancel", "connect", "copy"].iter())
             {
                 assert!(
@@ -876,6 +890,7 @@ mod tests {
         "logcat.wait_failed",
         "webview.forward_failed",
         "webview.pages_unreachable",
+        "applications.install_failed",
         "device.target_stale",
     ];
 
