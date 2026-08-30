@@ -7,7 +7,7 @@
 
 ## Decision
 
-Keep `bridgescope-adb` as a wrapper that spawns the platform-tools `adb` binary. Do not adopt a native Rust ADB-protocol client library.
+Keep `fadb-adb` as a wrapper that spawns the platform-tools `adb` binary. Do not adopt a native Rust ADB-protocol client library.
 
 Candidates evaluated (2026-08):
 
@@ -16,7 +16,7 @@ Candidates evaluated (2026-08):
 
 ## Context
 
-The only real gain from a protocol-native client is dropping the `adb` binary dependency, and BridgeScope cannot drop external tooling anyway: screen mirroring shells out to scrcpy, screen recording runs `screenrecord` on the device through a shell, and AVD management drives the emulator CLI. A migration would also have to relearn the real-device ROM quirks our parsers already encode (doubled-quoted Wi-Fi SSIDs, `null` font_scale, the `ip` command prefix), and would have to rebuild the streaming surfaces — the interactive terminal and live logcat — on top of a sync API.
+The only real gain from a protocol-native client is dropping the `adb` binary dependency, and Fadb cannot drop external tooling anyway: screen mirroring shells out to scrcpy, screen recording runs `screenrecord` on the device through a shell, and AVD management drives the emulator CLI. A migration would also have to relearn the real-device ROM quirks our parsers already encode (doubled-quoted Wi-Fi SSIDs, `null` font_scale, the `ip` command prefix), and would have to rebuild the streaming surfaces — the interactive terminal and live logcat — on top of a sync API.
 
 ## Consequences
 

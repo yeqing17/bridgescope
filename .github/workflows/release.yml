@@ -33,14 +33,14 @@ jobs:
           fi
 
           version="${tag#v}"
-          package_version="$(cargo metadata --no-deps --locked --format-version 1 | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(package["version"] for package in data["packages"] if package["name"] == "bridgescope-desktop"))')"
+          package_version="$(cargo metadata --no-deps --locked --format-version 1 | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(package["version"] for package in data["packages"] if package["name"] == "fadb-desktop"))')"
           if [[ "$version" != "$package_version" ]]; then
-            echo "Tag version $version does not match bridgescope-desktop $package_version" >&2
+            echo "Tag version $version does not match fadb-desktop $package_version" >&2
             exit 1
           fi
 
-          repository="$(cargo metadata --no-deps --locked --format-version 1 | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(package["repository"] for package in data["packages"] if package["name"] == "bridgescope-desktop"))')"
-          if [[ "$repository" != "https://github.com/yeqing17/bridgescope" ]]; then
+          repository="$(cargo metadata --no-deps --locked --format-version 1 | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(package["repository"] for package in data["packages"] if package["name"] == "fadb-desktop"))')"
+          if [[ "$repository" != "https://github.com/yeqing17/fadb" ]]; then
             echo "Unexpected Cargo repository: $repository" >&2
             exit 1
           fi
@@ -65,20 +65,20 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
       - run: cargo test --workspace --locked
-      - run: cargo build --package bridgescope-desktop --release --locked --target x86_64-pc-windows-msvc
+      - run: cargo build --package fadb-desktop --release --locked --target x86_64-pc-windows-msvc
       - name: Package Windows release
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $tag = "${{ github.ref_name }}"
-          $bundleName = "bridgescope-desktop-$tag-x86_64-pc-windows-msvc"
-          $binary = "target/x86_64-pc-windows-msvc/release/bridgescope-desktop.exe"
+          $bundleName = "fadb-desktop-$tag-x86_64-pc-windows-msvc"
+          $binary = "target/x86_64-pc-windows-msvc/release/fadb-desktop.exe"
           if (-not (Test-Path $binary -PathType Leaf) -or (Get-Item $binary).Length -eq 0) {
             throw "Release executable is missing or empty: $binary"
           }
 
           New-Item -ItemType Directory -Force -Path "dist/$bundleName" | Out-Null
-          Copy-Item $binary "dist/$bundleName/bridgescope-desktop.exe"
+          Copy-Item $binary "dist/$bundleName/fadb-desktop.exe"
           Copy-Item README.md, LICENSE-MIT, LICENSE-APACHE, NOTICE "dist/$bundleName/"
           Compress-Archive -Path "dist/$bundleName" -DestinationPath "dist/$bundleName.zip"
 
@@ -86,7 +86,7 @@ jobs:
           $archive = [System.IO.Compression.ZipFile]::OpenRead("dist/$bundleName.zip")
           try {
             $expected = @(
-              "$bundleName/bridgescope-desktop.exe",
+              "$bundleName/fadb-desktop.exe",
               "$bundleName/README.md",
               "$bundleName/LICENSE-MIT",
               "$bundleName/LICENSE-APACHE",
@@ -104,7 +104,7 @@ jobs:
           }
       - uses: actions/upload-artifact@v4
         with:
-          name: bridgescope-release-windows-x86_64
+          name: fadb-release-windows-x86_64
           path: dist/*.zip
           if-no-files-found: error
           retention-days: 7
@@ -120,7 +120,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: bridgescope-release-windows-x86_64
+          name: fadb-release-windows-x86_64
           path: dist
       - name: Generate checksums
         shell: bash
@@ -131,7 +131,7 @@ jobs:
             echo "Expected exactly one Windows release archive" >&2
             exit 1
           fi
-          checksum="bridgescope-desktop-${GITHUB_REF_NAME}-SHA256SUMS.txt"
+          checksum="fadb-desktop-${GITHUB_REF_NAME}-SHA256SUMS.txt"
           (
             cd dist
             sha256sum "${archives[0]}" > "$checksum"

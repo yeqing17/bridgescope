@@ -2,7 +2,7 @@
 
 # Architecture
 
-BridgeScope separates UI, application orchestration, device state, and transports.
+Fadb separates UI, application orchestration, device state, and transports.
 
 ```text
 egui desktop

@@ -1,13 +1,13 @@
 [workspace]
 resolver = "2"
 members = [
-    "apps/bridgescope-desktop",
-    "crates/bridgescope-domain",
-    "crates/bridgescope-adb",
-    "crates/bridgescope-device",
-    "crates/bridgescope-application",
-    "crates/bridgescope-scrcpy",
-    "crates/bridgescope-test-support", "crates/bridgescope-ai",
+    "apps/fadb-desktop",
+    "crates/fadb-domain",
+    "crates/fadb-adb",
+    "crates/fadb-device",
+    "crates/fadb-application",
+    "crates/fadb-scrcpy",
+    "crates/fadb-test-support", "crates/fadb-ai",
 ]
 
 [workspace.package]
@@ -15,7 +15,7 @@ version = "0.7.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.90"
-repository = "https://github.com/yeqing17/bridgescope"
+repository = "https://github.com/yeqing17/fadb"
 
 [workspace.dependencies]
 async-trait = "0.1.91"
@@ -39,7 +39,7 @@ uuid = { version = "1.24.0", features = ["v4", "serde"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
 
 [workspace.lints.rust]
-# "deny" rather than "forbid": apps/bridgescope-desktop/src/platform.rs is the
+# "deny" rather than "forbid": apps/fadb-desktop/src/platform.rs is the
 # single, reviewed FFI surface (DWM window chrome) and opts back in locally.
 unsafe_code = "deny"
 
@@ -50,6 +50,6 @@ module_name_repetitions = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 must_use_candidate = "allow"
-# "BridgeScope" is the project's proper noun and appears throughout doc
+# "Fadb" is the project's proper noun and appears throughout doc
 # comments; backticking every occurrence adds noise without value.
 doc_markdown = "allow"

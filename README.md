@@ -1,15 +1,17 @@
 中文 | [English](README.en.md)
 
-# BridgeScope
+# fadb
 
-BridgeScope 是一个独立实现的纯 Rust 桌面工具集,通过 ADB 检查与管理 Android 设备。
+> a featherweight ADB toolbox, in Rust
+
+fadb 是一个独立实现的纯 Rust 桌面工具集,通过 ADB 检查与管理 Android 设备。
 
 > 状态:**0.7.1。** 已发布面板:ADB 发现与诊断、显式设备选择(USB 与网络)、设备概览、交互式终端、二进制安全截图、提供方中立的 AI 助手、远端文件管理、应用管理与 APK 安装、进程与性能监控、实时 Logcat、布局检查器、WebView 检查、设备管理器中的无线调试(配对、TCP 模式、mDNS 发现),以及 scrcpy 视频投屏(可调最大尺寸/码率,仅视频)。其余路线图(AI 流式响应、屏幕录制、投屏控制注入与音频)记录在 [`docs/feature-matrix.md`](docs/feature-matrix.md)。文件删除仅限普通文件;目录删除是有意不提供的。
 
 ## 目标
 
 - 一个用 Rust 编写的跨平台 `egui` 桌面应用。
-- 安全、显式的 Android 设备定位;BridgeScope 绝不悄悄选中第一台设备。
+- 安全、显式的 Android 设备定位;Fadb 绝不悄悄选中第一台设备。
 - 设备概览、文件、应用、进程、性能、终端、布局、截图、Logcat、WebView 检查、投屏与无线调试逐步交付。
 - 对 ADB 子进程与流做确定性的取消与清理。
 - 基于公开协议与可观察行为的独立净室实现。
@@ -23,20 +25,20 @@ BridgeScope 是一个独立实现的纯 Rust 桌面工具集,通过 ADB 检查�
 ## 运行
 
 ```bash
-cargo run -p bridgescope-desktop
+cargo run -p fadb-desktop
 ```
 
 不接设备、使用假后端运行:
 
 ```bash
-BRIDGESCOPE_FAKE=1 cargo run -p bridgescope-desktop
+FADB_FAKE=1 cargo run -p fadb-desktop
 ```
 
 Windows 命令提示符下:
 
 ```bat
-set BRIDGESCOPE_FAKE=1
-cargo run -p bridgescope-desktop
+set FADB_FAKE=1
+cargo run -p fadb-desktop
 ```
 
 ## 质量检查
@@ -63,12 +65,12 @@ cargo build --workspace --release
 
 ## 安全
 
-BridgeScope 将每个结构化操作绑定到显式的设备序列号与连接代数。破坏性能力将由后端强制要求确认。交互式终端是不设限的专家功能;任意的 Android shell 命令无法做到安全化。
+Fadb 将每个结构化操作绑定到显式的设备序列号与连接代数。破坏性能力将由后端强制要求确认。交互式终端是不设限的专家功能;任意的 Android shell 命令无法做到安全化。
 
 ## 独立性
 
-BridgeScope 与 AYA、Android、Google 或 scrcpy 均无关联。它不复制 AYA 的源代码、品牌、图标、翻译、截图或视觉素材。见 [`docs/clean-room.md`](docs/clean-room.md)。
+Fadb 与 AYA、Android、Google 或 scrcpy 均无关联。它不复制 AYA 的源代码、品牌、图标、翻译、截图或视觉素材。见 [`docs/clean-room.md`](docs/clean-room.md)。
 
 ## 许可
 
-BridgeScope 源码在 MIT 许可或 Apache 许可 2.0 之下提供,由你自行选择。第三方工件保留其各自的许可与声明。
+Fadb 源码在 MIT 许可或 Apache 许可 2.0 之下提供,由你自行选择。第三方工件保留其各自的许可与声明。

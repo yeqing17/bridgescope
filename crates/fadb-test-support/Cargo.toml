@@ -1,0 +1,17 @@
+[package]
+name = "fadb-test-support"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+fadb-adb = { path = "../fadb-adb" }
+fadb-domain = { path = "../fadb-domain" }
+image.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+[lints]
+workspace = true

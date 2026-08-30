@@ -1,15 +1,17 @@
 *[中文](README.md) | English*
 
-# BridgeScope
+# fadb
 
-BridgeScope is an independently implemented, pure-Rust desktop toolkit for inspecting and managing Android devices through ADB.
+> a featherweight ADB toolbox, in Rust
+
+fadb is an independently implemented, pure-Rust desktop toolkit for inspecting and managing Android devices through ADB.
 
 > Status: **0.7.1.** Panels ship: ADB discovery and diagnostics, explicit device selection (USB and network), device overview, interactive shell, binary-safe screenshots, a provider-neutral AI assistant, remote file management, application management with APK install, process and performance monitors, live Logcat, a layout inspector, WebView inspection, wireless debugging (pairing, TCP mode, mDNS discovery) in the device manager, and scrcpy video mirroring (adjustable max size/bitrate, video-only). The remaining roadmap (AI streaming responses, screen recording, mirror control injection and audio) is tracked in [`docs/feature-matrix.md`](docs/en/feature-matrix.md). File deletion is restricted to regular files; directory deletion is intentionally unavailable.
 
 ## Goals
 
 - A cross-platform `egui` desktop application written in Rust.
-- Safe, explicit Android device targeting; BridgeScope never silently selects the first device.
+- Safe, explicit Android device targeting; Fadb never silently selects the first device.
 - Device overview, files, applications, processes, performance, shell, layout, screenshots, Logcat, WebView inspection, screencasting, and wireless debugging delivered incrementally.
 - Deterministic cancellation and cleanup of ADB subprocesses and streams.
 - Independent clean-room implementation based on public protocols and observable behavior.
@@ -23,20 +25,20 @@ BridgeScope is an independently implemented, pure-Rust desktop toolkit for inspe
 ## Run
 
 ```bash
-cargo run -p bridgescope-desktop
+cargo run -p fadb-desktop
 ```
 
 Run without a device using the fake backend:
 
 ```bash
-BRIDGESCOPE_FAKE=1 cargo run -p bridgescope-desktop
+FADB_FAKE=1 cargo run -p fadb-desktop
 ```
 
 On Windows Command Prompt:
 
 ```bat
-set BRIDGESCOPE_FAKE=1
-cargo run -p bridgescope-desktop
+set FADB_FAKE=1
+cargo run -p fadb-desktop
 ```
 
 ## Quality checks
@@ -63,12 +65,12 @@ cargo build --workspace --release
 
 ## Safety
 
-BridgeScope binds every structured operation to an explicit device serial and connection generation. Destructive capabilities will require backend-enforced confirmation. The interactive shell is an unrestricted expert feature; arbitrary Android shell commands cannot be made safe.
+Fadb binds every structured operation to an explicit device serial and connection generation. Destructive capabilities will require backend-enforced confirmation. The interactive shell is an unrestricted expert feature; arbitrary Android shell commands cannot be made safe.
 
 ## Independence
 
-BridgeScope is not affiliated with AYA, Android, Google, or scrcpy. It does not copy AYA source code, branding, icons, translations, screenshots, or visual assets. See [`docs/clean-room.md`](docs/en/clean-room.md).
+Fadb is not affiliated with AYA, Android, Google, or scrcpy. It does not copy AYA source code, branding, icons, translations, screenshots, or visual assets. See [`docs/clean-room.md`](docs/en/clean-room.md).
 
 ## License
 
-BridgeScope source is available under either the MIT License or Apache License 2.0, at your option. Third-party artifacts retain their own licenses and notices.
+Fadb source is available under either the MIT License or Apache License 2.0, at your option. Third-party artifacts retain their own licenses and notices.

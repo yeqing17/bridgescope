@@ -18,7 +18,7 @@ tests, and real-device acceptance flow pass.
 | ADB discovery and diagnostics | ✅ | locator (explicit/SDK/PATH), version, device list |
 | Device tracking and explicit selection | ✅ | generation-bound targeting, explicit select |
 | Network devices | ✅ | `adb connect` + up to 8 remembered endpoints |
-| Fake device backend | ✅ | `BRIDGESCOPE_FAKE=1` deterministic data |
+| Fake device backend | ✅ | `FADB_FAKE=1` deterministic data |
 | Device overview | ✅ | model, battery, memory, storage |
 | Interactive Shell | ✅ | subprocess PTY (`adb shell -tt`), ANSI, resize |
 | Screenshot | ✅ | binary-safe `exec-out screencap`, Fit/100%, save/copy |

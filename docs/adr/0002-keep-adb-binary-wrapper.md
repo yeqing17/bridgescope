@@ -7,7 +7,7 @@
 
 ## 决策
 
-`bridgescope-adb` 继续以子进程方式调用平台工具中的 `adb` 二进制。不引入 Rust 原生 ADB 协议客户端库。
+`fadb-adb` 继续以子进程方式调用平台工具中的 `adb` 二进制。不引入 Rust 原生 ADB 协议客户端库。
 
 候选评估(2026-08):
 
@@ -16,7 +16,7 @@
 
 ## 背景
 
-协议原生客户端唯一的实质收益是去掉 `adb` 二进制依赖,而 BridgeScope 反正去不掉外部工具:投屏要调 scrcpy,录屏通过 shell 在设备上运行 `screenrecord`,AVD 管理驱动 emulator CLI。迁移还必须重新踩一遍我们解析器已经编码的真机 ROM 怪癖(双层引号的 Wi-Fi SSID、`null` font_scale、`ip` 命令前缀),并在同步 API 之上重建流式界面 — 交互终端与实时 logcat。
+协议原生客户端唯一的实质收益是去掉 `adb` 二进制依赖,而 Fadb 反正去不掉外部工具:投屏要调 scrcpy,录屏通过 shell 在设备上运行 `screenrecord`,AVD 管理驱动 emulator CLI。迁移还必须重新踩一遍我们解析器已经编码的真机 ROM 怪癖(双层引号的 Wi-Fi SSID、`null` font_scale、`ip` 命令前缀),并在同步 API 之上重建流式界面 — 交互终端与实时 logcat。
 
 ## 后果
 

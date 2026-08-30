@@ -1,0 +1,13 @@
+[package]
+name = "fadb-device"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+fadb-adb = { path = "../fadb-adb" }
+fadb-domain = { path = "../fadb-domain" }
+
+[lints]
+workspace = true

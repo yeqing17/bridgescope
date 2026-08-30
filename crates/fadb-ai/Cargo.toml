@@ -1,0 +1,22 @@
+[package]
+name = "fadb-ai"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+fadb-domain = { path = "../fadb-domain" }
+serde.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true }
+tracing.workspace = true
+reqwest.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

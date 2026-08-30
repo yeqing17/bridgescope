@@ -364,110 +364,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bridgescope-adb"
-version = "0.7.1"
-dependencies = [
- "async-trait",
- "bridgescope-domain",
- "flate2",
- "image",
- "quick-xml 0.38.4",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
-name = "bridgescope-ai"
-version = "0.7.1"
-dependencies = [
- "async-trait",
- "bridgescope-domain",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.19",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "bridgescope-application"
-version = "0.7.1"
-dependencies = [
- "bridgescope-domain",
-]
-
-[[package]]
-name = "bridgescope-desktop"
-version = "0.7.1"
-dependencies = [
- "bridgescope-adb",
- "bridgescope-ai",
- "bridgescope-device",
- "bridgescope-domain",
- "bridgescope-scrcpy",
- "bridgescope-test-support",
- "eframe",
- "futures-util",
- "image",
- "raw-window-handle",
- "reqwest",
- "rfd",
- "serde",
- "serde_json",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "vt100",
- "windows-sys 0.59.0",
-]
-
-[[package]]
-name = "bridgescope-device"
-version = "0.7.1"
-dependencies = [
- "bridgescope-adb",
- "bridgescope-domain",
-]
-
-[[package]]
-name = "bridgescope-domain"
-version = "0.7.1"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.19",
- "uuid",
-]
-
-[[package]]
-name = "bridgescope-scrcpy"
-version = "0.7.1"
-dependencies = [
- "bridgescope-domain",
- "mp4",
- "openh264",
- "sha2",
- "tokio",
- "tokio-util",
-]
-
-[[package]]
-name = "bridgescope-test-support"
-version = "0.7.1"
-dependencies = [
- "async-trait",
- "bridgescope-adb",
- "bridgescope-domain",
- "image",
- "tokio",
- "tokio-util",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1038,6 +934,110 @@ checksum = "8be9f3dfaaffdae2972880079a491a1a8bb7cbed0b8dd7a347f668b4150a3b93"
 dependencies = [
  "event-listener",
  "pin-project-lite",
+]
+
+[[package]]
+name = "fadb-adb"
+version = "0.7.1"
+dependencies = [
+ "async-trait",
+ "fadb-domain",
+ "flate2",
+ "image",
+ "quick-xml 0.38.4",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "fadb-ai"
+version = "0.7.1"
+dependencies = [
+ "async-trait",
+ "fadb-domain",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "fadb-application"
+version = "0.7.1"
+dependencies = [
+ "fadb-domain",
+]
+
+[[package]]
+name = "fadb-desktop"
+version = "0.7.1"
+dependencies = [
+ "eframe",
+ "fadb-adb",
+ "fadb-ai",
+ "fadb-device",
+ "fadb-domain",
+ "fadb-scrcpy",
+ "fadb-test-support",
+ "futures-util",
+ "image",
+ "raw-window-handle",
+ "reqwest",
+ "rfd",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "vt100",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "fadb-device"
+version = "0.7.1"
+dependencies = [
+ "fadb-adb",
+ "fadb-domain",
+]
+
+[[package]]
+name = "fadb-domain"
+version = "0.7.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "uuid",
+]
+
+[[package]]
+name = "fadb-scrcpy"
+version = "0.7.1"
+dependencies = [
+ "fadb-domain",
+ "mp4",
+ "openh264",
+ "sha2",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "fadb-test-support"
+version = "0.7.1"
+dependencies = [
+ "async-trait",
+ "fadb-adb",
+ "fadb-domain",
+ "image",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

@@ -1,0 +1,41 @@
+[package]
+name = "fadb-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+fadb-adb = { path = "../../crates/fadb-adb" }
+fadb-ai = { path = "../../crates/fadb-ai" }
+fadb-device = { path = "../../crates/fadb-device" }
+fadb-domain = { path = "../../crates/fadb-domain" }
+fadb-scrcpy = { path = "../../crates/fadb-scrcpy" }
+fadb-test-support = { path = "../../crates/fadb-test-support" }
+eframe.workspace = true
+futures-util.workspace = true
+image.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+vt100.workspace = true
+tracing-subscriber.workspace = true
+rfd = "0.15.4"
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# Native window chrome (DWM rounded corners + shadow for the undecorated
+# window); see src/platform.rs — the workspace's only FFI surface.
+raw-window-handle = "0.6"
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_UI_Controls",
+] }
+
+[lints]
+workspace = true

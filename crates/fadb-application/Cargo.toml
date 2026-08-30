@@ -1,0 +1,12 @@
+[package]
+name = "fadb-application"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+fadb-domain = { path = "../fadb-domain" }
+
+[lints]
+workspace = true
