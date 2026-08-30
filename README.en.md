@@ -69,9 +69,11 @@ cargo build --workspace --release
 
 Fadb binds every structured operation to an explicit device serial and connection generation. Destructive capabilities will require backend-enforced confirmation. The interactive shell is an unrestricted expert feature; arbitrary Android shell commands cannot be made safe.
 
-## Independence
+## Independence and Credits
 
-Fadb is not affiliated with AYA, Android, Google, or scrcpy. It does not copy AYA source code, branding, icons, translations, screenshots, or visual assets. See [`docs/clean-room.md`](docs/en/clean-room.md).
+fadb takes feature cues from [AYA](https://github.com/liriliri/aya) — thanks for proving the product path. fadb is an independent clean-room implementation: it does not copy AYA source code, branding, icons, translations, screenshots, or visual assets; see [`docs/clean-room.md`](docs/en/clean-room.md).
+
+Android is a trademark of Google LLC; fadb is not affiliated with, or endorsed by, Google. Mirroring bundles and launches the [scrcpy](https://github.com/Genymobile/scrcpy) server (Genymobile, Apache-2.0, redistributed unmodified with credit), while the fadb client is an independent implementation; artifact versions, hashes, and licenses are recorded in [`docs/protocol-sources.md`](docs/en/protocol-sources.md).
 
 ## License
 

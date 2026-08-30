@@ -1,8 +1,9 @@
 Fadb
 Copyright 2026 Fadb contributors
 
-Fadb is an independent project and is not affiliated with AYA, Android,
-Google, or scrcpy.
+Fadb is an independent project and is not affiliated with, or endorsed by,
+AYA, Google, or Genymobile. Android is a trademark of Google LLC.
 
-No third-party binary artifacts are distributed by the 0.1 foundation build.
-Future distributions will list artifact versions, hashes, and license notices here.
+The mirror feature redistributes the unmodified scrcpy server (Genymobile,
+Apache-2.0). Artifact versions, hashes, and license notices are recorded in
+docs/protocol-sources.md.

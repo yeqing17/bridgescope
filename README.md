@@ -69,9 +69,11 @@ cargo build --workspace --release
 
 Fadb 将每个结构化操作绑定到显式的设备序列号与连接代数。破坏性能力将由后端强制要求确认。交互式终端是不设限的专家功能;任意的 Android shell 命令无法做到安全化。
 
-## 独立性
+## 独立性与致谢
 
-Fadb 与 AYA、Android、Google 或 scrcpy 均无关联。它不复制 AYA 的源代码、品牌、图标、翻译、截图或视觉素材。见 [`docs/clean-room.md`](docs/clean-room.md)。
+fadb 的功能设计参考了 [AYA](https://github.com/liriliri/aya),感谢它验证了这条产品路线。fadb 是独立的净室实现:不复制 AYA 的源代码、品牌、图标、翻译、截图或视觉素材,规则见 [`docs/clean-room.md`](docs/clean-room.md)。
+
+Android 是 Google LLC 的商标,fadb 与 Google、Android 无隶属或背书关系。投屏功能内置并调用 [scrcpy](https://github.com/Genymobile/scrcpy) 的 server(Genymobile,Apache-2.0,未经修改地再分发并在此署名),fadb 客户端为独立实现;工件版本、哈希与许可见 [`docs/protocol-sources.md`](docs/protocol-sources.md)。
 
 ## 许可
 
