@@ -1188,44 +1188,34 @@ fn close_button(ui: &mut egui::Ui, tooltip: &str, bar_height: f32) -> egui::Resp
     .inner
 }
 
-/// The Fadb logo: a rounded tile carrying a stylized bridge (arch,
-/// deck and a center hanger). Painted with the ui painter, so it needs no
-/// image assets and follows zoom and theme automatically.
+/// The Fadb logo tile from `assets/` (same mark as the taskbar and exe
+/// icon). Decoded once and cached as a texture on the context, so both the
+/// title bar and the assistant dock share it.
 pub(crate) fn logo(ui: &mut egui::Ui, size: f32) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
-    let painter = ui.painter();
-    painter.rect_filled(rect, size * 0.22, Color32::from_rgb(48, 52, 60));
-    let stroke = egui::Stroke::new((size / 11.0).max(1.4), Color32::WHITE);
-    let left = rect.left() + size * 0.18;
-    let right = rect.right() - size * 0.18;
-    let deck_y = rect.bottom() - size * 0.30;
-    let center_x = rect.center().x;
-    let radius = (right - left) * 0.5;
-    // Deck.
-    painter.line_segment(
-        [egui::pos2(left, deck_y), egui::pos2(right, deck_y)],
-        stroke,
+    let texture = logo_texture(ui.ctx());
+    ui.add(
+        egui::Image::from_texture(&texture)
+            .max_size(egui::vec2(size, size))
+            .corner_radius(size * 0.22),
     );
-    // Arch: the upper semicircle sampled as a polyline (egui's painter has no
-    // arc primitive in 0.33).
-    let arch = (0..=16u8)
-        .map(|step| {
-            let angle = std::f32::consts::PI + std::f32::consts::PI * f32::from(step) / 16.0;
-            egui::pos2(
-                center_x + radius * angle.cos(),
-                deck_y + radius * angle.sin(),
-            )
-        })
-        .collect();
-    painter.line(arch, stroke);
-    // Hanger from the arch apex down to the deck.
-    painter.line_segment(
-        [
-            egui::pos2(center_x, deck_y - radius),
-            egui::pos2(center_x, deck_y),
-        ],
-        stroke,
+}
+
+fn logo_texture(ctx: &egui::Context) -> egui::TextureHandle {
+    let logo_id = egui::Id::new("fadb-logo");
+    if let Some(handle) = ctx.data_mut(|cache| cache.get_temp::<egui::TextureHandle>(logo_id)) {
+        return handle;
+    }
+    let img = image::load_from_memory(include_bytes!("../assets/icon-64.png"))
+        .expect("embedded logo is a valid PNG")
+        .to_rgba8();
+    let [width, height] = [img.width() as usize, img.height() as usize];
+    let handle = ctx.load_texture(
+        "fadb-logo",
+        egui::ColorImage::from_rgba_unmultiplied([width, height], img.as_raw()),
+        egui::TextureOptions::default(),
     );
+    ctx.data_mut(|cache| cache.insert_temp(logo_id, handle.clone()));
+    handle
 }
 
 /// Invisible thickness of the window's resize seams, in points.
