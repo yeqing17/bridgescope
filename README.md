@@ -1,5 +1,7 @@
 中文 | [English](README.en.md)
 
+<p align="center"><img src="apps/fadb-desktop/assets/icon-256.png" width="128" alt="fadb 图标"></p>
+
 # fadb
 
 > a featherweight ADB toolbox, in Rust
