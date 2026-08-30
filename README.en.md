@@ -64,6 +64,10 @@ cargo build --workspace --release
 - **Logcat:** streams `logcat -v threadtime` live with per-level colors, severity and text filters, pause, autoscroll, and save-to-file. The stream starts automatically when the panel is opened and survives device switches.
 - **Layout inspector:** captures the foreground window hierarchy via `uiautomator dump`, renders it as a searchable view tree with per-node attributes, copyable node dumps, and XML export.
 - **WebView inspection:** discovers WebView DevTools sockets on the device, forwards a local port, lists debuggable pages, and opens them in the browser or the Chrome DevTools frontend.
+- **AI assistant:** a provider-neutral dock that talks to any OpenAI-compatible endpoint — base URL, API key, and model name are all configured and stored locally, and requests go only to the provider you configured. The system prompt anchors answers to Android debugging and standard `adb` commands.
+- **Mirroring:** forward-tunnel mirroring with the pinned scrcpy server 3.3.4 and adjustable max size/bitrate; key rows remote-control the device via `input keyevent`, and one tap records the current stream as MP4 (writing from the first keyframe).
+- **Quick commands:** custom command buttons on the shell toolbar with optional auto-Enter; the list persists locally and supports JSON import/export.
+- **Wireless debugging:** pairing-code pairing, one-click `adb tcpip 5555` for the selected device, and mDNS discovery with connect, all inside the Device Manager.
 
 ## Safety
 

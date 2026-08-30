@@ -2150,8 +2150,11 @@ async fn run_ai_chat(
     }
 }
 
-const FADB_SYSTEM_PROMPT: &str = "You are Fadb's assistant. Fadb is a pure-Rust Android debugging tool. \
-Keep replies concise and focused on Android debugging, ADB, and the device the user is testing.";
+const FADB_SYSTEM_PROMPT: &str = "You are Fadb's assistant. Fadb is a pure-Rust Android debugging \
+desktop app and has no command-line tool of its own. Every command you suggest must be a standard \
+ADB command starting with `adb` (for example `adb shell cat /proc/meminfo`); never invent a \
+`fadb` CLI. Answer in the user's language. Keep replies concise and focused on Android debugging, \
+ADB, and the device the user is testing.";
 
 async fn refresh_devices(
     transport: &dyn AdbTransport,

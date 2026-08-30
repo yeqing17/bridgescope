@@ -64,6 +64,10 @@ cargo build --workspace --release
 - **Logcat:** 实时流式传输 `logcat -v threadtime`,按级别着色、严重度与文本过滤、暂停、自动滚动、保存到文件。面板打开时自动启动流,设备切换后仍保持。
 - **布局检查器:** 通过 `uiautomator dump` 捕获前台窗口层级,渲染为可搜索的视图树,带逐节点属性、可复制的节点 dump 与 XML 导出。
 - **WebView 检查:** 发现设备上的 WebView DevTools socket,转发本地端口,列出可调试页面,并可在浏览器或 Chrome DevTools 前端中打开。
+- **AI 助手:** 提供方中立的停靠面板,对接任意 OpenAI 兼容接口 — base URL、API key 与模型名全部在本机配置并存储,请求只发往你自己配置的提供方。系统提示词把回答锚定在 Android 调试与标准 `adb` 命令上。
+- **投屏:** 固定 scrcpy server 3.3.4 的转发隧道投屏,可调最大尺寸/码率;按键行经 `input keyevent` 遥控设备,一键把当前画面录成 MP4(从首个关键帧开始写盘)。
+- **快捷指令:** 终端工具栏上的自定义命令按钮,可选自动回车,列表本地持久化,支持 JSON 导入/导出。
+- **无线调试:** 设备管理器内完成配对码配对、对所选设备一键 `adb tcpip 5555` 与 mDNS 发现并连接。
 
 ## 安全
 
