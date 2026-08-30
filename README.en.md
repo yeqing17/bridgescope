@@ -6,7 +6,7 @@
 
 fadb is an independently implemented, pure-Rust desktop toolkit for inspecting and managing Android devices through ADB.
 
-> Status: **0.7.1.** Panels ship: ADB discovery and diagnostics, explicit device selection (USB and network), device overview, interactive shell (with an editable quick-command bar), binary-safe screenshots, a provider-neutral AI assistant, remote file management, application management with APK install, process and performance monitors, live Logcat, a layout inspector, WebView inspection, wireless debugging (pairing, TCP mode, mDNS discovery) in the device manager, and scrcpy mirroring (adjustable max size/bitrate, key remote control, one-tap MP4 recording). The remaining roadmap (AI streaming responses, touch/text mirror input and audio) is tracked in [`docs/feature-matrix.md`](docs/en/feature-matrix.md). File deletion is restricted to regular files; directory deletion is intentionally unavailable.
+> Status: **0.8.0.** Panels ship: ADB discovery and diagnostics, explicit device selection (USB and network), device overview, interactive shell (with an editable quick-command bar), binary-safe screenshots, a provider-neutral AI assistant, remote file management, application management with APK install, process and performance monitors, live Logcat, a layout inspector, WebView inspection, wireless debugging (pairing, TCP mode, mDNS discovery) in the device manager, and scrcpy mirroring (adjustable max size/bitrate, key remote control, one-tap MP4 recording). The remaining roadmap (AI streaming responses, touch/text mirror input and audio) is tracked in [`docs/feature-matrix.md`](docs/en/feature-matrix.md). File deletion is restricted to regular files; directory deletion is intentionally unavailable.
 
 ## Goals
 
