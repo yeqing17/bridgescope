@@ -27,6 +27,10 @@ serde.workspace = true
 serde_json.workspace = true
 reqwest.workspace = true
 
+[target.'cfg(windows)'.build-dependencies]
+# Embeds assets/fadb.ico as the exe file icon (Explorer, taskbar default).
+winresource = "0.1"
+
 [target.'cfg(windows)'.dependencies]
 # Native window chrome (DWM rounded corners + shadow for the undecorated
 # window); see src/platform.rs — the workspace's only FFI surface.
