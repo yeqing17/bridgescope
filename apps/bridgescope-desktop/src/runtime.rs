@@ -10,7 +10,7 @@ use std::{
 use bridgescope_adb::{AdbLocator, AdbTransport, ProcessAdbTransport, ShellSessionHandle};
 use bridgescope_device::DeviceRegistry;
 use bridgescope_domain::{
-    ApplicationAction, ApplicationSnapshot, AvdEntry, BackendCommand, BackendEvent, BridgeError,
+    ApplicationAction, ApplicationSnapshot, BackendCommand, BackendEvent, BridgeError,
     DeviceSerial, DeviceTarget, ErrorCode, FileTransferDirection, FileTransferSummary,
     LogcatSessionId, OperationId, OverwritePolicy, PackageName, PerformanceSnapshot,
     ProcessSnapshot, RawScreenshotPng, RemoteFileMutationKind, RemoteFileMutationSummary,
@@ -223,28 +223,6 @@ async fn run_backend(
                             refresh_devices(transport.as_ref(), &mut registry, &events, &context)
                                 .await;
                         cancel_stale_transfers(&registry, &transfers);
-                    }
-                    BackendCommand::ListAvds => {
-                        list_avds(transport.as_ref(), &events, &context).await;
-                    }
-                    BackendCommand::LaunchAvd {
-                        request_id,
-                        name,
-                        wipe_data,
-                    } => {
-                        launch_avd(
-                            transport.as_ref(),
-                            request_id,
-                            name,
-                            wipe_data,
-                            &events,
-                            &context,
-                        )
-                        .await;
-                    }
-                    BackendCommand::KillEmulator { request_id, serial } => {
-                        kill_emulator(transport.as_ref(), request_id, serial, &events, &context)
-                            .await;
                     }
                     BackendCommand::PairDevice {
                         request_id,
@@ -825,49 +803,6 @@ async fn install_apk(
     });
 }
 
-/// Lists the SDK's AVDs and annotates each with the serial of the emulator
-/// currently running it, so the panel can show launch/stop state per entry.
-async fn list_avds(
-    transport: &dyn AdbTransport,
-    events: &mpsc::Sender<BackendEvent>,
-    context: &egui::Context,
-) {
-    let avds = transport.list_avds().await;
-    let entries = match avds {
-        Ok(names) => {
-            let devices = transport.list_devices().await.unwrap_or_default();
-            let emulators: Vec<DeviceSerial> = devices
-                .into_iter()
-                .filter(|device| {
-                    device.state.is_online() && device.serial.as_str().starts_with("emulator-")
-                })
-                .map(|device| device.serial)
-                .collect();
-            let mut running = Vec::new();
-            for serial in &emulators {
-                if let Ok(Some(name)) = transport.running_avd_name(serial).await {
-                    running.push((name, serial.clone()));
-                }
-            }
-            names
-                .into_iter()
-                .map(|name| AvdEntry {
-                    running_serial: running
-                        .iter()
-                        .find(|(running_name, _)| *running_name == name)
-                        .map(|(_, serial)| serial.clone()),
-                    name,
-                })
-                .collect()
-        }
-        Err(error) => {
-            send_event(events, context, BackendEvent::AvdsFailed { error }).await;
-            return;
-        }
-    };
-    send_event(events, context, BackendEvent::AvdsLoaded { avds: entries }).await;
-}
-
 /// Pairs with a wireless-debugging device; the success event only confirms
 /// the pairing, connecting still goes through the regular connect flow.
 async fn pair_device(
@@ -1235,45 +1170,6 @@ fn mirror_stream_error(error: SessionError) -> BridgeError {
             other.to_string(),
         ),
     }
-}
-
-/// Spawns an emulator; boot completion is observed through the regular device
-/// list, which the panel polls while a launch is recent.
-async fn launch_avd(
-    transport: &dyn AdbTransport,
-    request_id: OperationId,
-    name: String,
-    wipe_data: bool,
-    events: &mpsc::Sender<BackendEvent>,
-    context: &egui::Context,
-) {
-    let event = match transport.launch_avd(&name, wipe_data).await {
-        Ok(()) => BackendEvent::AvdLaunchFinished { request_id, name },
-        Err(error) => BackendEvent::AvdLaunchFailed {
-            request_id,
-            name,
-            error,
-        },
-    };
-    send_event(events, context, event).await;
-}
-
-async fn kill_emulator(
-    transport: &dyn AdbTransport,
-    request_id: OperationId,
-    serial: DeviceSerial,
-    events: &mpsc::Sender<BackendEvent>,
-    context: &egui::Context,
-) {
-    let event = match transport.kill_emulator(&serial).await {
-        Ok(()) => BackendEvent::EmulatorKillFinished { request_id, serial },
-        Err(error) => BackendEvent::EmulatorKillFailed {
-            request_id,
-            serial,
-            error,
-        },
-    };
-    send_event(events, context, event).await;
 }
 
 async fn list_webview_sockets(

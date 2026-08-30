@@ -1,6 +1,5 @@
 mod application;
 mod application_icon;
-mod emulator;
 mod files;
 mod layout;
 mod logcat;
@@ -27,7 +26,6 @@ use bridgescope_domain::{
 };
 use tokio_util::sync::CancellationToken;
 
-pub use emulator::{emulator_candidates, parse_avd_list, parse_avd_name};
 pub use layout::parse_hierarchy;
 pub use shell::{ShellOutputChunk, ShellSessionHandle, ShellStream};
 pub use wireless::parse_mdns_services;
@@ -218,16 +216,6 @@ pub trait AdbTransport: Send + Sync {
     async fn remove_forward(&self, serial: &DeviceSerial, port: u16) -> Result<(), BridgeError>;
     /// Installs an APK from the host filesystem (`adb install -r`).
     async fn install_apk(&self, serial: &DeviceSerial, apk_path: &Path) -> Result<(), BridgeError>;
-    /// Lists the AVDs known to the SDK emulator binary; `AdbFailed` when the
-    /// binary itself is missing from the SDK.
-    async fn list_avds(&self) -> Result<Vec<String>, BridgeError>;
-    /// Spawns an emulator for the named AVD (optionally wiping its data) and
-    /// returns once the process is up; boot is observed via the device list.
-    async fn launch_avd(&self, name: &str, wipe_data: bool) -> Result<(), BridgeError>;
-    /// The AVD name behind an emulator serial, or `None` for other devices.
-    async fn running_avd_name(&self, serial: &DeviceSerial) -> Result<Option<String>, BridgeError>;
-    /// Asks an emulator to exit through its console.
-    async fn kill_emulator(&self, serial: &DeviceSerial) -> Result<(), BridgeError>;
     /// Pairs with a wireless-debugging device using its pairing code.
     async fn pair_device(&self, host: &str, port: u16, code: &str) -> Result<(), BridgeError>;
     /// Switches a connected device to TCP listening mode.
@@ -254,20 +242,6 @@ impl ProcessAdbTransport {
 
     pub fn executable(&self) -> &Path {
         &self.executable
-    }
-
-    /// The SDK emulator binary, if this adb ships alongside one.
-    fn located_emulator(&self) -> Result<PathBuf, BridgeError> {
-        emulator::emulator_candidates(&self.executable)
-            .into_iter()
-            .find(|path| path.is_file())
-            .ok_or_else(|| {
-                BridgeError::new(
-                    ErrorCode::AdbNotFound,
-                    "avd.emulator_missing",
-                    "emulator executable was not found in the Android SDK",
-                )
-            })
     }
 
     async fn run<I, S>(&self, arguments: I) -> Result<String, BridgeError>
@@ -665,24 +639,6 @@ impl AdbTransport for ProcessAdbTransport {
 
     async fn install_apk(&self, serial: &DeviceSerial, apk_path: &Path) -> Result<(), BridgeError> {
         application::install_apk(&self.executable, serial, apk_path, self.max_output_bytes).await
-    }
-
-    async fn list_avds(&self) -> Result<Vec<String>, BridgeError> {
-        let executable = self.located_emulator()?;
-        emulator::list_avds(&executable, self.timeout).await
-    }
-
-    async fn launch_avd(&self, name: &str, wipe_data: bool) -> Result<(), BridgeError> {
-        let executable = self.located_emulator()?;
-        emulator::launch_avd(&executable, name, wipe_data)
-    }
-
-    async fn running_avd_name(&self, serial: &DeviceSerial) -> Result<Option<String>, BridgeError> {
-        emulator::running_avd_name(&self.executable, serial, self.timeout).await
-    }
-
-    async fn kill_emulator(&self, serial: &DeviceSerial) -> Result<(), BridgeError> {
-        emulator::kill_emulator(&self.executable, serial, self.timeout).await
     }
 
     async fn pair_device(&self, host: &str, port: u16, code: &str) -> Result<(), BridgeError> {

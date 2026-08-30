@@ -9,7 +9,7 @@ subprocess transport) instead of the original protocol-level ambitions.
 A visible panel is not considered implemented until its backend, UI states,
 tests, and real-device acceptance flow pass.
 
-## Status (0.7.0)
+## Status (0.7.1)
 
 | Area | Status | Notes |
 |---|---|---|
@@ -29,8 +29,8 @@ tests, and real-device acceptance flow pass.
 | Performance metrics | ✅ | 1s sampling, CPU/memory/battery history charts |
 | Layout inspector | ✅ | uiautomator dump, searchable tree, attributes, XML export |
 | WebView inspection | ✅ | DevTools sockets, page list, inspector URL |
-| AVD manager | ✅ | list via SDK emulator, launch (± wipe-data), running state, `emu kill` stop with confirm |
-| Wireless debugging | ✅ | `adb pair` with code, `tcpip 5555` for the selected device, mDNS discovery with connect; note: running-AVD detection needs a genuine SDK emulator console |
+| AVD manager | ❌ | removed in 0.7.1: only managed SDK-emulator AVDs, which does not help users on third-party emulators (LDPlayer, MuMu, ...); launch/stop those from their own consoles |
+| Wireless debugging | ✅ | `adb pair` with code, `tcpip 5555` for the selected device, mDNS discovery with connect |
 | scrcpy screen mirror | ✅ | video-only forward-tunnel mirror of the selected device: adjustable max size / bitrate, pinned scrcpy server 3.3.4, openh264 decode to an egui texture, one mirror at a time, stop on device-side exit |
 | AI streaming responses | ⏳ | SSE on the reserved provider surface |
 | Screen recording | 🧪 | evaluate after mirroring ships |
@@ -41,15 +41,14 @@ tests, and real-device acceptance flow pass.
 
 ### Phase 1 — 0.6: device workflow completion (adb.exe transport) — DONE
 
-All three items shipped in 0.6.0 on the existing subprocess transport.
+Shipped in 0.6.0 on the existing subprocess transport.
 
 1. **APK install** — `adb install -r` behind a file picker in the applications
    panel; explicit success/failure surfacing with adb's own failure text.
-2. **AVD manager** — list AVDs through the SDK emulator binary, launch (with
-   optional wipe-data), show running state, stop via `adb emu kill`. The AVD
-   panel is host-scoped (no device selection) and polls the device list after
-   a launch. An env-gated roundtrip test
-   (`launch_and_kill_roundtrip_boots_a_real_avd`) boots and stops a real AVD.
+2. ~~**AVD manager**~~ — shipped in 0.6.0, **removed in 0.7.1**: it only managed
+   AVDs of the official SDK emulator, which is irrelevant to users of
+   third-party emulators; those emulators are launched and stopped from their
+   own consoles.
 3. **Wireless debugging** — pairing-code flow (`adb pair host:port code`), a
    one-click `adb tcpip 5555` action for the selected device, and mDNS
    discovery (`adb mdns services`) with connect buttons, all inside the

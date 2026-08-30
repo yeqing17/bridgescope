@@ -2,13 +2,13 @@
 
 BridgeScope is an independently implemented, pure-Rust desktop toolkit for inspecting and managing Android devices through ADB.
 
-> Status: **0.7.0.** Panels ship: ADB discovery and diagnostics, explicit device selection (USB and network), device overview, interactive shell, binary-safe screenshots, a provider-neutral AI assistant, remote file management, application management with APK install, process and performance monitors, live Logcat, a layout inspector, WebView inspection, an AVD manager (launch/stop emulators), wireless debugging (pairing, TCP mode, mDNS discovery) in the device manager, and scrcpy video mirroring (adjustable max size/bitrate, video-only). The remaining roadmap (AI streaming responses, screen recording, mirror control injection and audio) is tracked in [`docs/feature-matrix.md`](docs/feature-matrix.md). File deletion is restricted to regular files; directory deletion is intentionally unavailable.
+> Status: **0.7.1.** Panels ship: ADB discovery and diagnostics, explicit device selection (USB and network), device overview, interactive shell, binary-safe screenshots, a provider-neutral AI assistant, remote file management, application management with APK install, process and performance monitors, live Logcat, a layout inspector, WebView inspection, wireless debugging (pairing, TCP mode, mDNS discovery) in the device manager, and scrcpy video mirroring (adjustable max size/bitrate, video-only). The remaining roadmap (AI streaming responses, screen recording, mirror control injection and audio) is tracked in [`docs/feature-matrix.md`](docs/feature-matrix.md). File deletion is restricted to regular files; directory deletion is intentionally unavailable.
 
 ## Goals
 
 - A cross-platform `egui` desktop application written in Rust.
 - Safe, explicit Android device targeting; BridgeScope never silently selects the first device.
-- Device overview, files, applications, processes, performance, shell, layout, screenshots, Logcat, WebView inspection, screencasting, and AVD management delivered incrementally.
+- Device overview, files, applications, processes, performance, shell, layout, screenshots, Logcat, WebView inspection, screencasting, and wireless debugging delivered incrementally.
 - Deterministic cancellation and cleanup of ADB subprocesses and streams.
 - Independent clean-room implementation based on public protocols and observable behavior.
 

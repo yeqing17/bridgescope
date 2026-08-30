@@ -828,23 +828,6 @@ impl AdbTransport for FakeAdbTransport {
         self.online_device(serial).await
     }
 
-    async fn list_avds(&self) -> Result<Vec<String>, BridgeError> {
-        Ok(vec!["Fake_Pixel_9a".to_owned(), "Fake_Tablet".to_owned()])
-    }
-
-    async fn launch_avd(&self, _name: &str, _wipe_data: bool) -> Result<(), BridgeError> {
-        Ok(())
-    }
-
-    async fn running_avd_name(&self, serial: &DeviceSerial) -> Result<Option<String>, BridgeError> {
-        self.online_device(serial).await?;
-        Ok((serial.as_str().starts_with("emulator-")).then(|| "Fake_Pixel_9a".to_owned()))
-    }
-
-    async fn kill_emulator(&self, serial: &DeviceSerial) -> Result<(), BridgeError> {
-        self.online_device(serial).await
-    }
-
     async fn pair_device(&self, host: &str, _port: u16, code: &str) -> Result<(), BridgeError> {
         if host.trim().is_empty() || !(6..=8).contains(&code.len()) {
             return Err(BridgeError::invalid_input("wireless.pair_invalid"));
