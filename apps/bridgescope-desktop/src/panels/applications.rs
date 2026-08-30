@@ -428,7 +428,7 @@ fn app_tile(
     let selected = state.selected.as_ref() == Some(&app.package);
     let painter = ui.painter();
     let fill = if selected {
-        Some(theme::ACCENT.gamma_multiply(0.30))
+        Some(ui.visuals().widgets.active.weak_bg_fill)
     } else if response.hovered() {
         Some(palette.chip_fill)
     } else {
@@ -475,7 +475,7 @@ fn app_tile(
             egui::Align2::RIGHT_BOTTOM,
             "❄",
             egui::FontId::proportional(12.0),
-            egui::Color32::from_rgb(150, 165, 255),
+            egui::Color32::from_rgb(160, 165, 175),
         );
     }
     painter.text(

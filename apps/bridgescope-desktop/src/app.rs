@@ -14,12 +14,14 @@ use crate::{
         screenshot, shell, webview,
     },
     platform,
+    quick_commands::{QuickCommand, QuickCommandStore},
     runtime::{MirrorFrameBuffer, RuntimeBridge},
     theme, wireless,
 };
 
 const RECENT_ENDPOINTS_STORAGE_KEY: &str = "bridgescope.recent_adb_endpoints";
 const AI_SETTINGS_STORAGE_KEY: &str = "bridgescope.ai_settings";
+const QUICK_COMMANDS_STORAGE_KEY: &str = "bridgescope.shell_quick_commands";
 const MAX_RECENT_ENDPOINTS: usize = 8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -173,6 +175,7 @@ impl BridgeScopeApp {
         // Reconnect automatically when complete settings were persisted; the
         // key is required so a half-configured install still shows the setup
         // prompt instead of failing every request with 401.
+        app.shell.quick_commands = load_quick_commands(creation_context.storage);
         if let Some(settings) =
             stored_ai.filter(|settings| settings.is_usable() && !settings.api_key.trim().is_empty())
         {
@@ -206,6 +209,21 @@ impl BridgeScopeApp {
             })
         {
             app.active_panel = panel;
+        }
+        // Shell-panel screenshots: `BRIDGESCOPE_QUICK_COMMANDS=10` seeds that
+        // many synthetic quick commands, so the two-row toolbar cap and the ⋯
+        // overflow menu can be inspected without typing them in by hand.
+        if let Some(count) = std::env::var_os("BRIDGESCOPE_QUICK_COMMANDS")
+            .and_then(|value| value.into_string().ok())
+            .and_then(|value| value.trim().parse::<usize>().ok())
+        {
+            for index in 0..count {
+                app.shell.quick_commands.commands.push(QuickCommand::new(
+                    format!("示例命令 {}", index + 1),
+                    format!("echo demo-{}", index + 1),
+                    true,
+                ));
+            }
         }
         app
     }
@@ -313,7 +331,8 @@ impl BridgeScopeApp {
                 | BackendEvent::ApplicationDetailsFailed { error, .. }
                 | BackendEvent::ApplicationActionFailed { error, .. }
                 | BackendEvent::ApkInstallFailed { error, .. }
-                | BackendEvent::MirrorFailed { error, .. } => {
+                | BackendEvent::MirrorFailed { error, .. }
+                | BackendEvent::MirrorRecordingFailed { error, .. } => {
                     self.last_error = Some(error);
                 }
                 BackendEvent::OperationFailed(error) => {
@@ -364,6 +383,7 @@ impl BridgeScopeApp {
                 | BackendEvent::MdnsFailed { .. }
                 | BackendEvent::MirrorStarted { .. }
                 | BackendEvent::MirrorStopped { .. }
+                | BackendEvent::MirrorRecordingSaved { .. }
                 | BackendEvent::ScreenshotLoading { .. }
                 | BackendEvent::ScreenshotCaptured { .. }
                 | BackendEvent::ScreenshotFailed { .. }
@@ -561,12 +581,18 @@ impl BridgeScopeApp {
                                 self.send(BackendCommand::LoadOverview(serial));
                             }
                         }
-                        if ui.button(text(self.language, "device_manager")).clicked() {
-                            self.windows.devices = true;
-                        }
-                        if ui.button(text(self.language, "diagnostics")).clicked() {
-                            self.windows.diagnostics = true;
-                        }
+                        // Toggle buttons: a second click closes the window
+                        // again, and the highlighted state mirrors it.
+                        window_toggle_button(
+                            ui,
+                            text(self.language, "device_manager"),
+                            &mut self.windows.devices,
+                        );
+                        window_toggle_button(
+                            ui,
+                            text(self.language, "diagnostics"),
+                            &mut self.windows.diagnostics,
+                        );
                         if ui
                             .add(
                                 egui::Button::new(text(self.language, "assistant"))
@@ -650,9 +676,13 @@ impl BridgeScopeApp {
                         );
                         Vec::new()
                     }
-                    Panel::Shell => {
-                        shell::show(ui, self.language, selected.as_ref(), &mut self.shell)
-                    }
+                    Panel::Shell => shell::show(
+                        ui,
+                        context,
+                        self.language,
+                        selected.as_ref(),
+                        &mut self.shell,
+                    ),
                     Panel::Screenshot => {
                         screenshot::show(ui, self.language, selected.as_ref(), &mut self.screenshot)
                     }
@@ -1044,6 +1074,39 @@ impl eframe::App for BridgeScopeApp {
         if let Ok(serialized) = serde_json::to_string(&ai) {
             storage.set_string(AI_SETTINGS_STORAGE_KEY, serialized);
         }
+        // Quick commands save as-is (an emptied list stays empty); only
+        // sendable entries are worth round-tripping.
+        let sendable: Vec<_> = self
+            .shell
+            .quick_commands
+            .commands
+            .iter()
+            .filter(|command| command.is_sendable())
+            .cloned()
+            .collect();
+        if let Ok(serialized) = serde_json::to_string(&sendable) {
+            storage.set_string(QUICK_COMMANDS_STORAGE_KEY, serialized);
+        }
+    }
+}
+
+fn load_quick_commands(storage: Option<&dyn eframe::Storage>) -> QuickCommandStore {
+    let Some(serialized) =
+        storage.and_then(|storage| storage.get_string(QUICK_COMMANDS_STORAGE_KEY))
+    else {
+        return QuickCommandStore::default();
+    };
+    // A stored (possibly emptied) list always wins over the seed defaults;
+    // only unreadable data falls back to them.
+    match serde_json::from_str::<Vec<QuickCommand>>(&serialized) {
+        Ok(commands) => QuickCommandStore {
+            commands,
+            ..QuickCommandStore::default()
+        },
+        Err(error) => {
+            tracing::warn!(%error, "stored quick commands were unreadable; using defaults");
+            QuickCommandStore::default()
+        }
     }
 }
 
@@ -1099,6 +1162,14 @@ fn caption_button(
     .on_hover_text(tooltip)
 }
 
+/// A top-bar button that toggles a floating window: clicking again closes
+/// it, and the highlighted state mirrors whether the window is open.
+fn window_toggle_button(ui: &mut egui::Ui, label: &str, open: &mut bool) {
+    if ui.add(egui::Button::new(label).selected(*open)).clicked() {
+        *open = !*open;
+    }
+}
+
 /// The title-bar close button: neutral when idle, Windows-style red on hover.
 fn close_button(ui: &mut egui::Ui, tooltip: &str, bar_height: f32) -> egui::Response {
     ui.scope(|ui| {
@@ -1123,7 +1194,7 @@ fn close_button(ui: &mut egui::Ui, tooltip: &str, bar_height: f32) -> egui::Resp
 pub(crate) fn logo(ui: &mut egui::Ui, size: f32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
     let painter = ui.painter();
-    painter.rect_filled(rect, size * 0.22, Color32::from_rgb(91, 105, 255));
+    painter.rect_filled(rect, size * 0.22, Color32::from_rgb(48, 52, 60));
     let stroke = egui::Stroke::new((size / 11.0).max(1.4), Color32::WHITE);
     let left = rect.left() + size * 0.18;
     let right = rect.right() - size * 0.18;

@@ -328,6 +328,27 @@ pub struct DeviceOverview {
     pub storage_total_kib: Option<u64>,
     pub storage_used_kib: Option<u64>,
     pub capabilities: DeviceCapabilities,
+    /// `ro.product.brand` — marketing brand, often but not always the
+    /// manufacturer in different casing.
+    pub brand: Option<String>,
+    /// Kernel release from `uname -r` (e.g. `5.15.178-android13`).
+    pub kernel_version: Option<String>,
+    /// SoC / board name: `ro.soc.model`, falling back to `ro.board.platform`
+    /// then `ro.hardware`.
+    pub soc: Option<String>,
+    pub cpu_cores: Option<u32>,
+    /// Physical display size from `wm size` (e.g. `1080x2400`).
+    pub screen_physical: Option<String>,
+    /// Physical display density from `wm density` (e.g. `440`).
+    pub screen_density: Option<String>,
+    /// Override display size from `wm size`, present only when the user or a
+    /// developer setting changed the resolution.
+    pub screen_override: Option<String>,
+    /// System font scale from `settings get system font_scale` (e.g. `1.0`).
+    pub font_scale: Option<String>,
+    pub wifi_ssid: Option<String>,
+    pub ip_address: Option<String>,
+    pub mac_address: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1057,6 +1078,18 @@ pub enum BackendCommand {
     },
     /// Stop the current mirror session if one is running.
     StopMirror,
+    /// Begin recording the running mirror session to an MP4 file next to the
+    /// app. The file is announced by
+    /// [`BackendEvent::MirrorRecordingSaved`] once recording stops.
+    StartMirrorRecording,
+    /// Finalize the running mirror recording, if any.
+    StopMirrorRecording,
+    /// Deliver one key event to the device (remote-control click). The
+    /// runtime answers [`BackendEvent::OperationFailed`] on failure only.
+    SendKeyEvent {
+        target: DeviceTarget,
+        keycode: u32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1182,6 +1215,17 @@ pub enum BackendEvent {
     },
     MirrorFailed {
         request_id: OperationId,
+        target: DeviceTarget,
+        error: BridgeError,
+    },
+    /// A mirror recording was finalized and written to `path`.
+    MirrorRecordingSaved {
+        target: DeviceTarget,
+        path: PathBuf,
+        frames: u64,
+    },
+    /// A mirror recording could not be produced (write failure or no frames).
+    MirrorRecordingFailed {
         target: DeviceTarget,
         error: BridgeError,
     },

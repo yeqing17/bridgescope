@@ -8,6 +8,7 @@
 
 pub mod decoder;
 pub mod protocol;
+pub mod recorder;
 pub mod server;
 pub mod session;
 

@@ -50,9 +50,20 @@ impl Default for FakeAdbTransport {
             serial: serial.clone(),
             model: descriptor.model.clone(),
             manufacturer: Some("BridgeScope Labs".to_owned()),
+            brand: Some("BridgeScope".to_owned()),
             android_version: Some("16".to_owned()),
             api_level: Some(36),
             abi: Some("x86_64".to_owned()),
+            soc: Some("Bakso Series 3".to_owned()),
+            cpu_cores: Some(8),
+            kernel_version: Some("6.6.30-android16".to_owned()),
+            screen_physical: Some("1080x2400".to_owned()),
+            screen_density: Some("440".to_owned()),
+            screen_override: None,
+            font_scale: Some("1.0".to_owned()),
+            wifi_ssid: Some("bridgescope-lab".to_owned()),
+            ip_address: Some("192.168.1.42".to_owned()),
+            mac_address: Some("02:11:5a:be:ef:33".to_owned()),
             battery_percent: Some(84),
             memory_total_kib: Some(8 * 1024 * 1024),
             storage_total_kib: Some(128 * 1024 * 1024),
@@ -419,6 +430,14 @@ impl AdbTransport for FakeAdbTransport {
         package: &PackageName,
     ) -> Result<(), BridgeError> {
         self.require_application(serial, package).await
+    }
+
+    async fn send_key_event(
+        &self,
+        _serial: &DeviceSerial,
+        _keycode: u32,
+    ) -> Result<(), BridgeError> {
+        Ok(())
     }
 
     async fn force_stop_application(

@@ -19,7 +19,8 @@ use bridgescope_domain::{
 };
 use bridgescope_scrcpy::decoder::{RgbaFrame, VideoDecoder};
 use bridgescope_scrcpy::{
-    ScrcpySessionPlan, server as scrcpy_server, session as scrcpy_session, session::SessionError,
+    ScrcpySessionPlan, recorder as scrcpy_recorder, server as scrcpy_server,
+    session as scrcpy_session, session::SessionError,
 };
 use bridgescope_test_support::FakeAdbTransport;
 use eframe::egui;
@@ -58,6 +59,10 @@ pub struct MirrorFrameBuffer {
 
 struct ActiveMirror {
     cancellation: CancellationToken,
+    /// `Some(path)` while a recording was requested. The session's packet
+    /// loop owns the actual recorder and polls this flag between packets;
+    /// the file is written and announced by the session task.
+    recording: Arc<std::sync::Mutex<Option<PathBuf>>>,
 }
 
 struct ActiveTransfer {
@@ -274,6 +279,29 @@ async fn run_backend(
                     }
                     BackendCommand::StopMirror => {
                         stop_mirror(&mut mirror);
+                    }
+                    BackendCommand::StartMirrorRecording => {
+                        start_mirror_recording(mirror.as_ref(), &events, &context).await;
+                    }
+                    BackendCommand::StopMirrorRecording => {
+                        if let Some(active) = mirror.as_ref()
+                            && let Ok(mut wanted) = active.recording.lock()
+                        {
+                            // The session finalizes the file on the next
+                            // packet (or at session end) and reports it.
+                            *wanted = None;
+                        }
+                    }
+                    BackendCommand::SendKeyEvent { target, keycode } => {
+                        send_key_event(
+                            transport.as_ref(),
+                            &registry,
+                            target,
+                            keycode,
+                            &events,
+                            &context,
+                        )
+                        .await;
                     }
                     BackendCommand::ConnectDevice(endpoint) => {
                         send_event(
@@ -895,8 +923,10 @@ async fn start_mirror(
     let socket = scrcpy_server::abstract_socket_name(scid);
     let args = scrcpy_server::server_arguments(scid, &plan);
     let cancellation = CancellationToken::new();
+    let recording = Arc::new(std::sync::Mutex::new(None));
     *mirror = Some(ActiveMirror {
         cancellation: cancellation.clone(),
+        recording: Arc::clone(&recording),
     });
     tokio::spawn(run_mirror_session(
         transport,
@@ -905,6 +935,7 @@ async fn start_mirror(
         args,
         socket,
         cancellation,
+        recording,
         mirror_frames,
         events.clone(),
         context.clone(),
@@ -919,6 +950,70 @@ fn stop_mirror(mirror: &mut Option<ActiveMirror>) {
     }
 }
 
+/// Records the running mirror session to `./recordings/bridgescope-<ts>.mp4`
+/// (same convention as the screenshot panel). The session picks the request
+/// up between packets and announces the file only when recording stops.
+async fn start_mirror_recording(
+    mirror: Option<&ActiveMirror>,
+    events: &mpsc::Sender<BackendEvent>,
+    context: &egui::Context,
+) {
+    let Some(active) = mirror else {
+        send_event(
+            events,
+            context,
+            BackendEvent::OperationFailed(BridgeError::new(
+                ErrorCode::Internal,
+                "mirror.record_not_running",
+                String::new(),
+            )),
+        )
+        .await;
+        return;
+    };
+    let directory = std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("recordings");
+    let _ = std::fs::create_dir_all(&directory);
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let path = directory.join(format!("bridgescope-{timestamp}.mp4"));
+    if let Ok(mut wanted) = active.recording.lock() {
+        *wanted = Some(path);
+    }
+}
+
+/// Maps a finalized recording to the panel events. The demux packet loop
+/// calls this from a sync closure where awaiting is impossible, so it uses
+/// `try_send` — the app loop drains the channel continuously.
+fn report_recording(
+    outcome: scrcpy_recorder::RecorderOutcome,
+    target: &DeviceTarget,
+    path: &std::path::Path,
+    events: &mpsc::Sender<BackendEvent>,
+    context: &egui::Context,
+) {
+    let event = match outcome {
+        scrcpy_recorder::RecorderOutcome::Written(frames) => BackendEvent::MirrorRecordingSaved {
+            target: target.clone(),
+            path: path.to_path_buf(),
+            frames,
+        },
+        scrcpy_recorder::RecorderOutcome::Empty => BackendEvent::MirrorRecordingFailed {
+            target: target.clone(),
+            error: BridgeError::new(ErrorCode::Internal, "mirror.record_empty", String::new()),
+        },
+        scrcpy_recorder::RecorderOutcome::Failed(detail) => BackendEvent::MirrorRecordingFailed {
+            target: target.clone(),
+            error: BridgeError::new(ErrorCode::Internal, "mirror.record_write_failed", detail),
+        },
+    };
+    let _ = events.try_send(event);
+    context.request_repaint();
+}
+
 /// Runs one mirror session end to end: push the pinned server jar, forward a
 /// local port to the server's abstract socket, launch it inside a shell
 /// session, then demux and decode the video stream until stopped or ended.
@@ -930,6 +1025,7 @@ async fn run_mirror_session(
     args: Vec<String>,
     socket: String,
     cancellation: CancellationToken,
+    recording: Arc<std::sync::Mutex<Option<PathBuf>>>,
     mirror_frames: Arc<std::sync::Mutex<MirrorFrameBuffer>>,
     events: mpsc::Sender<BackendEvent>,
     context: egui::Context,
@@ -1116,18 +1212,49 @@ async fn run_mirror_session(
             return;
         }
     };
-    let result =
-        scrcpy_session::demux_packets(&mut tcp, &mut decoder, &cancellation, &mut |frame| {
-            if let Ok(mut buffer) = frame_buffer.lock() {
+    // The recorder is owned by the packet loop; the flag is flipped by the
+    // command handlers. A stop takes effect on the next packet, so latency is
+    // bounded by one frame period.
+    let mut recorder: Option<scrcpy_recorder::VideoRecorder> = None;
+    let result = scrcpy_session::demux_packets(
+        &mut tcp,
+        &mut decoder,
+        &cancellation,
+        &mut |header, payload, frame| {
+            if let Some(frame) = frame
+                && let Ok(mut buffer) = frame_buffer.lock()
+            {
                 buffer.decoded += 1;
                 buffer.frame = Some(Arc::new(frame));
             }
-        })
-        .await;
+            let wanted = recording.lock().ok().and_then(|flag| flag.clone());
+            match wanted {
+                Some(path) if recorder.is_none() => {
+                    recorder = Some(scrcpy_recorder::VideoRecorder::new(path, width, height));
+                }
+                None => {
+                    if let Some(mut active) = recorder.take() {
+                        let path = active.path().to_path_buf();
+                        report_recording(active.finish(), &target, &path, &events, &context);
+                    }
+                }
+                _ => {}
+            }
+            if let Some(active) = recorder.as_mut() {
+                active.feed(header.config, header.key_frame, header.pts, payload);
+            }
+        },
+    )
+    .await;
 
     drop(tcp);
     let _ = shell.close().await;
     spawn_remove_forward(&transport, &serial, port);
+    // A still-active recording is finalized even when the session ends first.
+    if let Some(mut active) = recorder.take() {
+        let path = active.path().to_path_buf();
+        report_recording(active.finish(), &target, &path, &events, &context);
+    }
 
     let event = match result {
         Ok(_) | Err(SessionError::Cancelled) => BackendEvent::MirrorStopped { request_id, target },
@@ -2439,6 +2566,33 @@ async fn run_application_action(
             )
             .await;
         }
+    }
+}
+
+/// Delivers one remote-control key press. Fire-and-forget by design: only
+/// failures surface, through the generic error event.
+async fn send_key_event(
+    transport: &dyn AdbTransport,
+    registry: &DeviceRegistry,
+    target: DeviceTarget,
+    keycode: u32,
+    events: &mpsc::Sender<BackendEvent>,
+    context: &egui::Context,
+) {
+    let error = if registry.current_online(&target).is_none() {
+        Some(BridgeError::new(
+            ErrorCode::DeviceUnavailable,
+            "device.target_stale",
+            "selected device is no longer online",
+        ))
+    } else {
+        transport
+            .send_key_event(&target.serial, keycode)
+            .await
+            .err()
+    };
+    if let Some(error) = error {
+        send_event(events, context, BackendEvent::OperationFailed(error)).await;
     }
 }
 

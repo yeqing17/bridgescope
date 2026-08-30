@@ -4,6 +4,7 @@ mod app;
 mod i18n;
 mod panels;
 mod platform;
+mod quick_commands;
 mod runtime;
 mod theme;
 mod wireless;

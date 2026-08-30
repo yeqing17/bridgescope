@@ -142,6 +142,8 @@ pub trait AdbTransport: Send + Sync {
         serial: &DeviceSerial,
         package: &PackageName,
     ) -> Result<(), BridgeError>;
+    /// Send one key event to the device (`input keyevent <code>`).
+    async fn send_key_event(&self, serial: &DeviceSerial, keycode: u32) -> Result<(), BridgeError>;
     /// Best-effort launcher icon; `Ok(None)` means "no extractable icon"
     /// (device offline, parse failure, unsupported resource shape, …) and
     /// the UI falls back to a generated tile.
@@ -290,6 +292,34 @@ impl ProcessAdbTransport {
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty())
     }
+
+    /// `ip addr|link show wlan0`, falling back to eth0: phones expose their
+    /// address on wlan0, while emulators and Wi-Fi-less devices use eth0.
+    async fn interface_report(&self, serial: &DeviceSerial, verb: &str) -> Option<String> {
+        if let Some(output) = self
+            .optional_shell(serial, &["ip", verb, "show", "wlan0"])
+            .await
+        {
+            return Some(output);
+        }
+        self.optional_shell(serial, &["ip", verb, "show", "eth0"])
+            .await
+    }
+
+    /// System font scale; ROMs report the literal `null` when the scale was
+    /// never changed, where Android's effective default is 1.0.
+    async fn font_scale(&self, serial: &DeviceSerial) -> Option<String> {
+        self.optional_shell(serial, &["settings", "get", "system", "font_scale"])
+            .await
+            .and_then(|value| match value.as_str() {
+                "null" => Some("1.0".to_owned()),
+                _ => value
+                    .trim()
+                    .parse::<f32>()
+                    .ok()
+                    .map(|scale| scale.to_string()),
+            })
+    }
 }
 
 #[async_trait]
@@ -328,22 +358,31 @@ impl AdbTransport for ProcessAdbTransport {
             ));
         }
 
-        let model = self
-            .optional_shell(serial, &["getprop", "ro.product.model"])
-            .await;
-        let manufacturer = self
-            .optional_shell(serial, &["getprop", "ro.product.manufacturer"])
-            .await;
-        let android_version = self
-            .optional_shell(serial, &["getprop", "ro.build.version.release"])
-            .await;
-        let api_level = self
-            .optional_shell(serial, &["getprop", "ro.build.version.sdk"])
+        // One full `getprop` dump covers every ro.* field the overview shows;
+        // individual lookups would each pay a full device round-trip.
+        let props = self
+            .optional_shell(serial, &["getprop"])
             .await
-            .and_then(|value| value.parse().ok());
-        let abi = self
-            .optional_shell(serial, &["getprop", "ro.product.cpu.abi"])
-            .await;
+            .map(|output| parse_prop_map(&output))
+            .unwrap_or_default();
+        let prop = |name: &str| {
+            props
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.clone())
+        };
+
+        let manufacturer = prop("ro.product.manufacturer");
+        let wm_size = self.optional_shell(serial, &["wm", "size"]).await;
+        let wm_density = self.optional_shell(serial, &["wm", "density"]).await;
+        let ip_address = self
+            .interface_report(serial, "addr")
+            .await
+            .and_then(|output| parse_inet_address(&output));
+        let mac_address = self
+            .interface_report(serial, "link")
+            .await
+            .and_then(|output| parse_mac_address(&output));
         let battery_percent = self
             .optional_shell(serial, &["dumpsys", "battery"])
             .await
@@ -360,11 +399,36 @@ impl AdbTransport for ProcessAdbTransport {
 
         Ok(DeviceOverview {
             serial: serial.clone(),
-            model: model.or(descriptor.model),
+            model: prop("ro.product.model").or(descriptor.model),
             manufacturer,
-            android_version,
-            api_level,
-            abi,
+            brand: prop("ro.product.brand"),
+            android_version: prop("ro.build.version.release"),
+            api_level: prop("ro.build.version.sdk").and_then(|value| value.parse().ok()),
+            abi: prop("ro.product.cpu.abi"),
+            soc: prop("ro.soc.model")
+                .or_else(|| prop("ro.board.platform"))
+                .or_else(|| prop("ro.hardware")),
+            cpu_cores: self
+                .optional_shell(serial, &["nproc"])
+                .await
+                .and_then(|value| value.parse().ok()),
+            kernel_version: self.optional_shell(serial, &["uname", "-r"]).await,
+            screen_physical: wm_size
+                .as_deref()
+                .and_then(|value| parse_wm_value(value, "Physical size:")),
+            screen_override: wm_size
+                .as_deref()
+                .and_then(|value| parse_wm_value(value, "Override size:")),
+            screen_density: wm_density
+                .as_deref()
+                .and_then(|value| parse_wm_value(value, "Physical density:")),
+            font_scale: self.font_scale(serial).await,
+            wifi_ssid: self
+                .optional_shell(serial, &["cmd", "wifi", "status"])
+                .await
+                .and_then(|value| parse_wifi_ssid(&value)),
+            ip_address,
+            mac_address,
             battery_percent,
             memory_total_kib,
             storage_total_kib: storage.map(|(total, _)| total),
@@ -442,6 +506,15 @@ impl AdbTransport for ProcessAdbTransport {
         package: &PackageName,
     ) -> Result<(), BridgeError> {
         self.shell(serial, &["am", "force-stop", package.as_str()])
+            .await
+            .map(|_| ())
+    }
+
+    async fn send_key_event(&self, serial: &DeviceSerial, keycode: u32) -> Result<(), BridgeError> {
+        let code = keycode.to_string();
+        // Numeric codes are used on purpose: symbolic KEYCODE_* names are not
+        // accepted by every ROM's `input` implementation.
+        self.shell(serial, &["input", "keyevent", code.as_str()])
             .await
             .map(|_| ())
     }
@@ -777,6 +850,62 @@ fn parse_cpu_usage_percent(output: &str) -> Option<f32> {
     })
 }
 
+/// Parses a full `getprop` dump of `[key]: [value]` lines. Values may contain
+/// spaces and most punctuation, so the separator — not whitespace — splits
+/// each line.
+fn parse_prop_map(output: &str) -> Vec<(String, String)> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let rest = line.trim().strip_prefix('[')?;
+            let (key, value) = rest.split_once("]: [")?;
+            let value = value.strip_suffix(']')?;
+            (!key.is_empty() && !value.is_empty()).then(|| (key.to_owned(), value.to_owned()))
+        })
+        .collect()
+}
+
+/// Extracts a `wm` report value such as `Physical size: 1080x2400`.
+fn parse_wm_value(output: &str, prefix: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        let value = line.trim().strip_prefix(prefix)?.trim();
+        (!value.is_empty()).then(|| value.to_owned())
+    })
+}
+
+/// First IPv4 address of the interface listing from `ip addr show …`.
+fn parse_inet_address(output: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        // `inet6` deliberately fails this prefix check, skipping v6 links.
+        let rest = line.trim().strip_prefix("inet ")?;
+        let address = rest.split_whitespace().next()?.split('/').next()?;
+        (!address.is_empty()).then(|| address.to_owned())
+    })
+}
+
+/// Hardware address from an `ip link show …` listing.
+fn parse_mac_address(output: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        let rest = line.trim().strip_prefix("link/ether ")?;
+        let mac = rest.split_whitespace().next()?;
+        // xx:xx:xx:xx:xx:xx — a length check filters stray non-MAC tokens.
+        (mac.len() == 17).then(|| mac.to_owned())
+    })
+}
+
+/// SSID from `cmd wifi status` (Android 11+). Quote styles vary — some
+/// builds emit doubled quotes (`""ssid""`) — so the first comma-separated
+/// segment is unwrapped of any quote-ish characters.
+fn parse_wifi_ssid(output: &str) -> Option<String> {
+    let line = output.lines().find(|line| line.contains("connected to"))?;
+    let rest = line.split_once("connected to")?.1;
+    let segment = rest.split(',').next()?.trim();
+    let ssid = segment
+        .trim_matches(|c: char| matches!(c, '"' | '\'' | '\u{201c}' | '\u{201d}' | ':' | '\\'))
+        .trim();
+    (!ssid.is_empty()).then(|| ssid.to_owned())
+}
+
 fn connect_arguments(endpoint: &AdbEndpoint) -> [OsString; 2] {
     [
         OsString::from("connect"),
@@ -819,6 +948,68 @@ mod tests {
             ),
             Some((1000, 250))
         );
+    }
+
+    #[test]
+    fn parses_full_getprop_dump() {
+        let input = "[ro.product.model]: [Pixel 8]\n[ro.build.version.release]: [14]\nnot a prop line\n[empty]: []\n";
+        let props = parse_prop_map(input);
+        assert_eq!(props.len(), 2);
+        assert_eq!(
+            props[0],
+            ("ro.product.model".to_owned(), "Pixel 8".to_owned())
+        );
+        assert_eq!(props[1].1, "14");
+    }
+
+    #[test]
+    fn parses_wm_report_values() {
+        let size = "Physical size: 1080x2400\nOverride size: 900x2000\n";
+        assert_eq!(
+            parse_wm_value(size, "Physical size:"),
+            Some("1080x2400".to_owned())
+        );
+        assert_eq!(
+            parse_wm_value(size, "Override size:"),
+            Some("900x2000".to_owned())
+        );
+        assert_eq!(
+            parse_wm_value("Physical density: 440", "Physical density:"),
+            Some("440".to_owned())
+        );
+        assert_eq!(parse_wm_value("Physical size:", "Physical size:"), None);
+    }
+
+    #[test]
+    fn parses_interface_address_and_mac() {
+        let addr = "24: wlan0: <UP> mtu 1500\n    inet 172.16.1.15/24 brd 172.16.1.255 scope global wlan0\n    inet6 fe80::1/64 scope link\n";
+        assert_eq!(parse_inet_address(addr), Some("172.16.1.15".to_owned()));
+        assert_eq!(parse_inet_address("    inet6 fe80::1/64\n"), None);
+        let link =
+            "12: wlan0: <BROADCAST,UP>\n    link/ether 00:db:8d:66:14:0a brd ff:ff:ff:ff:ff:ff\n";
+        assert_eq!(
+            parse_mac_address(link),
+            Some("00:db:8d:66:14:0a".to_owned())
+        );
+        assert_eq!(parse_mac_address("    link/ether short\n"), None);
+    }
+
+    #[test]
+    fn parses_wifi_ssid_from_status() {
+        assert_eq!(
+            parse_wifi_ssid("Wifi is connected to \"lab-net\", Wi-Fi is Full"),
+            Some("lab-net".to_owned())
+        );
+        // Some builds double the quotes.
+        assert_eq!(
+            parse_wifi_ssid("Wifi is connected to \"\"lab-net\"\""),
+            Some("lab-net".to_owned())
+        );
+        assert_eq!(
+            parse_wifi_ssid("Wifi is connected to: bare-net, …"),
+            Some("bare-net".to_owned())
+        );
+        assert_eq!(parse_wifi_ssid("Wifi is disabled"), None);
     }
 
     #[test]

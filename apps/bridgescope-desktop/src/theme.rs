@@ -5,8 +5,9 @@ use eframe::egui::{
     Vec2,
 };
 
-/// Accent used for selection, the primary button, and the logo tile.
-pub const ACCENT: Color32 = Color32::from_rgb(99, 112, 255);
+/// Accent orange, reserved for primary buttons, links, and search hits. The
+/// chrome itself stays monochrome: selection and hover states are grays.
+pub const ACCENT: Color32 = Color32::from_rgb(249, 115, 22);
 
 /// Colors the hand-drawn chrome (bubbles, cards, status dots) needs beyond
 /// what `Visuals` exposes; one struct per theme so panels can stay in sync
@@ -18,7 +19,7 @@ pub struct Palette {
     pub ai_bubble: Color32,
     /// Faint border for reply bubbles so they read on both themes.
     pub bubble_stroke: Color32,
-    /// Indigo-tinted fill for the user's own messages.
+    /// Neutral fill for the user's own messages.
     pub user_bubble: Color32,
     /// Fill of small rounded chips (model name, tags).
     pub chip_fill: Color32,
@@ -35,7 +36,7 @@ pub fn palette(dark_mode: bool) -> Palette {
             central_fill: Color32::from_rgb(21, 22, 26),
             ai_bubble: Color32::from_rgb(36, 38, 46),
             bubble_stroke: Color32::from_rgb(48, 50, 59),
-            user_bubble: Color32::from_rgb(52, 58, 110),
+            user_bubble: Color32::from_rgb(50, 55, 64),
             chip_fill: Color32::from_rgb(42, 44, 53),
             danger_fill: Color32::from_rgb(62, 28, 32),
             danger_stroke: Color32::from_rgb(150, 66, 72),
@@ -46,7 +47,7 @@ pub fn palette(dark_mode: bool) -> Palette {
             central_fill: Color32::from_rgb(244, 245, 248),
             ai_bubble: Color32::from_rgb(255, 255, 255),
             bubble_stroke: Color32::from_rgb(224, 227, 235),
-            user_bubble: Color32::from_rgb(224, 227, 252),
+            user_bubble: Color32::from_rgb(227, 230, 236),
             chip_fill: Color32::from_rgb(232, 234, 241),
             danger_fill: Color32::from_rgb(253, 235, 236),
             danger_stroke: Color32::from_rgb(226, 134, 140),
@@ -125,13 +126,19 @@ fn build_visuals(dark_mode: bool) -> egui::Visuals {
     visuals.menu_corner_radius = CornerRadius::same(8);
     visuals.window_stroke = Stroke::new(1.0, colors.bubble_stroke);
     visuals.indent_has_left_vline = false;
-    visuals.selection.bg_fill = Color32::from_rgba_unmultiplied(99, 112, 255, 70);
+    // Neutral slate for text selection and selectable lists — the sidebar pill
+    // included. Bright enough to read on both themes.
+    visuals.selection.bg_fill = if dark_mode {
+        Color32::from_rgba_unmultiplied(142, 148, 160, 85)
+    } else {
+        Color32::from_rgba_unmultiplied(125, 135, 155, 75)
+    };
 
     let widgets = &mut visuals.widgets;
     widgets.noninteractive.corner_radius = radius;
     widgets.noninteractive.bg_stroke = Stroke::new(1.0, colors.bubble_stroke);
-    // Ghost buttons: nothing when idle, a subtle chip on hover, accent ring
-    // while pressed.
+    // Ghost buttons: nothing when idle, a subtle chip on hover, a slightly
+    // stronger gray while pressed — no colored ring.
     widgets.inactive.corner_radius = radius;
     widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
     widgets.inactive.bg_stroke = Stroke::NONE;
@@ -148,7 +155,7 @@ fn build_visuals(dark_mode: bool) -> egui::Visuals {
     } else {
         Color32::from_rgb(212, 216, 226)
     };
-    widgets.active.bg_stroke = Stroke::new(1.0, ACCENT);
+    widgets.active.bg_stroke = Stroke::NONE;
     widgets.open.corner_radius = radius;
     visuals
 }

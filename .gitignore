@@ -1,4 +1,6 @@
 /target/
+/screenshots/
+/recordings/
 *.log
 .idea/
 .vscode/

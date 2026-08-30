@@ -1,85 +1,67 @@
-# Feature matrix & roadmap
+中文 | [English](en/feature-matrix.md)
 
-Status legend: ✅ shipped, 🚧 current milestone, ⏳ planned, 🧪 exploratory, ❌ descoped.
+# 功能矩阵与路线图
 
-The status table tracks what ships today. The roadmap sequences what is next; it
-was re-baselined after 0.5.0 against the shipping architecture (the `adb.exe`
-subprocess transport) instead of the original protocol-level ambitions.
+状态图例:✅ 已发布,🚧 当前里程碑,⏳ 已规划,🧪 探索中,❌ 已排除。
 
-A visible panel is not considered implemented until its backend, UI states,
-tests, and real-device acceptance flow pass.
+状态表记录今天已发布的能力。路线图给后续工作排序;0.5.0 之后按实际发布形态(`adb.exe` 子进程传输)重新定基,放弃了最初的协议层设想。
 
-## Status (0.7.1)
+一个面板只有在后端、UI 状态、测试与真机验收全部通过之后才算实现。
 
-| Area | Status | Notes |
+## 状态 (0.7.1)
+
+| 领域 | 状态 | 说明 |
 |---|---|---|
-| ADB discovery and diagnostics | ✅ | locator (explicit/SDK/PATH), version, device list |
-| Device tracking and explicit selection | ✅ | generation-bound targeting, explicit select |
-| Network devices | ✅ | `adb connect` + up to 8 remembered endpoints |
-| Fake device backend | ✅ | `BRIDGESCOPE_FAKE=1` deterministic data |
-| Device overview | ✅ | model, battery, memory, storage |
-| Interactive Shell | ✅ | subprocess PTY (`adb shell -tt`), ANSI, resize |
-| Screenshot | ✅ | binary-safe `exec-out screencap`, Fit/100%, save/copy |
-| AI assistant | ✅ | provider-neutral; OpenAI-compatible single-shot chat |
-| Logcat | ✅ | live stream, level colors/filter, search, save |
-| File management | ✅ | upload/download, mkdir/rename/delete, context menu |
-| Application management | ✅ | list, icons, launch/stop/clear/freeze/uninstall |
-| APK install | ✅ | file picker + `adb install -r`, adb's own failure text surfaced |
-| Process monitor | ✅ | 3s auto-refresh table |
-| Performance metrics | ✅ | 1s sampling, CPU/memory/battery history charts |
-| Layout inspector | ✅ | uiautomator dump, searchable tree, attributes, XML export |
-| WebView inspection | ✅ | DevTools sockets, page list, inspector URL |
-| AVD manager | ❌ | removed in 0.7.1: only managed SDK-emulator AVDs, which does not help users on third-party emulators (LDPlayer, MuMu, ...); launch/stop those from their own consoles |
-| Wireless debugging | ✅ | `adb pair` with code, `tcpip 5555` for the selected device, mDNS discovery with connect |
-| scrcpy screen mirror | ✅ | video-only forward-tunnel mirror of the selected device: adjustable max size / bitrate, pinned scrcpy server 3.3.4, openh264 decode to an egui texture, one mirror at a time, stop on device-side exit |
-| AI streaming responses | ⏳ | SSE on the reserved provider surface |
-| Screen recording | 🧪 | evaluate after mirroring ships |
-| Pure Rust Android helper | ❌ | descoped, see roadmap |
-| Native ADB shell-v2 | ❌ | descoped, see roadmap |
+| ADB 发现与诊断 | ✅ | 定位器(显式/SDK/PATH)、版本、设备列表 |
+| 设备跟踪与显式选择 | ✅ | 绑定代数的目标定位、显式选择 |
+| 网络设备 | ✅ | `adb connect` + 最多 8 个记忆端点 |
+| 假设备后端 | ✅ | `BRIDGESCOPE_FAKE=1` 确定性数据 |
+| 设备概览 | ✅ | 型号、电池、内存、存储 |
+| 交互式终端 | ✅ | 子进程 PTY(`adb shell -tt`)、ANSI、resize |
+| 截图 | ✅ | 二进制安全的 `exec-out screencap`、适应/100%、保存/复制 |
+| AI 助手 | ✅ | 提供方中立;OpenAI 兼容单轮对话 |
+| Logcat | ✅ | 实时流、级别着色/过滤、搜索、保存 |
+| 文件管理 | ✅ | 上传/下载、mkdir/rename/delete、右键菜单 |
+| 应用管理 | ✅ | 列表、图标、启动/停止/清除/冻结/卸载 |
+| APK 安装 | ✅ | 文件选择器 + `adb install -r`,透传 adb 自己的失败文本 |
+| 进程监控 | ✅ | 3 秒自动刷新表格 |
+| 性能指标 | ✅ | 1 秒采样,CPU/内存/电池历史图表 |
+| 布局检查器 | ✅ | uiautomator dump、可搜索树、属性、XML 导出 |
+| WebView 检查 | ✅ | DevTools socket、页面列表、检查器 URL |
+| AVD 管理器 | ❌ | 0.7.1 移除:只能管理官方 SDK 模拟器的 AVD,对第三方模拟器(LDPlayer、MuMu 等)用户没有帮助;这些模拟器请从各自的控制台启动/停止 |
+| 无线调试 | ✅ | 带配对码的 `adb pair`、对所选设备一键 `tcpip 5555`、mDNS 发现并连接 |
+| scrcpy 投屏 | ✅ | 仅视频的转发隧道投屏所选设备:可调最大尺寸/码率、固定 scrcpy server 3.3.4、openh264 解码到 egui 纹理、同时仅一路投屏、设备端退出即停止 |
+| AI 流式响应 | ⏳ | 在预留的提供方接口上实现 SSE |
+| 屏幕录制 | 🧪 | 投屏发布后再评估 |
+| 纯 Rust Android helper | ❌ | 已排除,见路线图 |
+| 原生 ADB shell-v2 | ❌ | 已排除,见路线图 |
 
-## Roadmap
+## 路线图
 
-### Phase 1 — 0.6: device workflow completion (adb.exe transport) — DONE
+### 阶段 1 — 0.6:设备工作流补全(adb.exe 传输)— 已完成
 
-Shipped in 0.6.0 on the existing subprocess transport.
+0.6.0 已在现有子进程传输上发布。
 
-1. **APK install** — `adb install -r` behind a file picker in the applications
-   panel; explicit success/failure surfacing with adb's own failure text.
-2. ~~**AVD manager**~~ — shipped in 0.6.0, **removed in 0.7.1**: it only managed
-   AVDs of the official SDK emulator, which is irrelevant to users of
-   third-party emulators; those emulators are launched and stopped from their
-   own consoles.
-3. **Wireless debugging** — pairing-code flow (`adb pair host:port code`), a
-   one-click `adb tcpip 5555` action for the selected device, and mDNS
-   discovery (`adb mdns services`) with connect buttons, all inside the
-   device-manager window.
+1. **APK 安装** — 应用面板中藏在文件选择器后面的 `adb install -r`;显式呈现成败,失败时透传 adb 自己的错误文本。
+2. ~~**AVD 管理器**~~ — 0.6.0 发布,**0.7.1 移除**:只能管理官方 SDK 模拟器的 AVD,与第三方模拟器用户无关;这些模拟器从各自的控制台启动和停止。
+3. **无线调试** — 配对码流程(`adb pair host:port code`)、对所选设备一键 `adb tcpip 5555`、mDNS 发现(`adb mdns services`)带连接按钮,全部位于设备管理器窗口内。
 
-### Phase 2 — 0.7: scrcpy phase 1 (video mirror) — DONE
+### 阶段 2 — 0.7:scrcpy 第一阶段(视频投屏)— 已完成
 
-Shipped in 0.7.0:
+0.7.0 已发布:
 
-- Decoder spike resolved to the `openh264` crate (bundled OpenH264 C sources, no
-  external binary); protocol version, artifact hash, and doc links recorded in
-  `docs/protocol-sources.md` per the clean-room policy before any protocol byte
-  was implemented.
-- Device screen mirroring with adjustable max size / bitrate rendered to an
-  egui texture, one mirror at a time per device; the stop path covers both the
-  button and the device-side server dying (forward removed, UI reset).
-- Explicitly out of phase 1: control injection and audio.
+- 解码器选型确定为 `openh264` crate(内置 OpenH264 C 源码,无外部二进制);按净室政策,在实现任何协议字节之前,把协议版本、工件哈希与文档链接记录在 `docs/protocol-sources.md`。
+- 设备屏幕投屏,可调最大尺寸/码率,渲染到 egui 纹理,每台设备同时仅一路;停止路径同时覆盖按钮与设备端 server 死亡(forward 被移除、UI 复位)。
+- 第一阶段明确不包含:控制注入与音频。
 
-### Phase 3 — later
+### 阶段 3 — 以后
 
-- scrcpy phase 2: touch/key/text injection (control protocol).
-- scrcpy phase 3: audio capture (Android 11+).
-- AI streaming responses (SSE) on the existing provider surface.
-- Screen recording (`screenrecord`) if mirroring leaves a gap.
+- scrcpy 第二阶段:触摸/按键/文本注入(控制协议)。
+- scrcpy 第三阶段:音频采集(Android 11+)。
+- 在现有提供方接口上的 AI 流式响应(SSE)。
+- 若投屏留有空白,补屏幕录制(`screenrecord`)。
 
-### Descoped (decisions recorded 2026-08)
+### 已排除(2026-08 记录决策)
 
-- **Pure Rust Android helper** (in-process ADB server/protocol in Rust): the
-  `adb.exe` transport shipped every panel below the 0.6 milestone; reimplementing
-  ADB auth, server protocol, and mDNS is months of work with no user-visible
-  gain. Revisit only if bundling/licensing constraints change.
-- **Native shell-v2**: demoted. The subprocess PTY shell works on all three
-  platforms; shell-v2 would only add remote exit codes and split stderr.
-  Revisit alongside any future protocol-level work.
+- **纯 Rust Android helper**(进程内 Rust ADB server/协议):到 0.6 里程碑为止,全部面板都已基于 `adb.exe` 传输发布;用 Rust 重新实现 ADB 认证、server 协议与 mDNS 需要数月工作量,却没有用户可见的收益。仅在打包/许可约束变化时重新评估。
+- **原生 shell-v2**:降级。子进程 PTY 终端在三个平台都能用;shell-v2 只会增加远端退出码和拆分 stderr。与未来任何协议层工作一并重新评估。

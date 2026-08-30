@@ -1,43 +1,45 @@
+中文 | [English](README.en.md)
+
 # BridgeScope
 
-BridgeScope is an independently implemented, pure-Rust desktop toolkit for inspecting and managing Android devices through ADB.
+BridgeScope 是一个独立实现的纯 Rust 桌面工具集,通过 ADB 检查与管理 Android 设备。
 
-> Status: **0.7.1.** Panels ship: ADB discovery and diagnostics, explicit device selection (USB and network), device overview, interactive shell, binary-safe screenshots, a provider-neutral AI assistant, remote file management, application management with APK install, process and performance monitors, live Logcat, a layout inspector, WebView inspection, wireless debugging (pairing, TCP mode, mDNS discovery) in the device manager, and scrcpy video mirroring (adjustable max size/bitrate, video-only). The remaining roadmap (AI streaming responses, screen recording, mirror control injection and audio) is tracked in [`docs/feature-matrix.md`](docs/feature-matrix.md). File deletion is restricted to regular files; directory deletion is intentionally unavailable.
+> 状态:**0.7.1。** 已发布面板:ADB 发现与诊断、显式设备选择(USB 与网络)、设备概览、交互式终端、二进制安全截图、提供方中立的 AI 助手、远端文件管理、应用管理与 APK 安装、进程与性能监控、实时 Logcat、布局检查器、WebView 检查、设备管理器中的无线调试(配对、TCP 模式、mDNS 发现),以及 scrcpy 视频投屏(可调最大尺寸/码率,仅视频)。其余路线图(AI 流式响应、屏幕录制、投屏控制注入与音频)记录在 [`docs/feature-matrix.md`](docs/feature-matrix.md)。文件删除仅限普通文件;目录删除是有意不提供的。
 
-## Goals
+## 目标
 
-- A cross-platform `egui` desktop application written in Rust.
-- Safe, explicit Android device targeting; BridgeScope never silently selects the first device.
-- Device overview, files, applications, processes, performance, shell, layout, screenshots, Logcat, WebView inspection, screencasting, and wireless debugging delivered incrementally.
-- Deterministic cancellation and cleanup of ADB subprocesses and streams.
-- Independent clean-room implementation based on public protocols and observable behavior.
+- 一个用 Rust 编写的跨平台 `egui` 桌面应用。
+- 安全、显式的 Android 设备定位;BridgeScope 绝不悄悄选中第一台设备。
+- 设备概览、文件、应用、进程、性能、终端、布局、截图、Logcat、WebView 检查、投屏与无线调试逐步交付。
+- 对 ADB 子进程与流做确定性的取消与清理。
+- 基于公开协议与可观察行为的独立净室实现。
 
-## Prerequisites
+## 前置要求
 
 - Rust 1.90
-- Android SDK Platform Tools (`adb`) available through `PATH`, `ANDROID_SDK_ROOT`, or `ANDROID_HOME`
-- Windows, macOS, or Linux desktop build prerequisites for `eframe`
+- Android SDK Platform Tools(`adb`),通过 `PATH`、`ANDROID_SDK_ROOT` 或 `ANDROID_HOME` 可用
+- Windows、macOS 或 Linux 上 `eframe` 的桌面构建依赖
 
-## Run
+## 运行
 
 ```bash
 cargo run -p bridgescope-desktop
 ```
 
-Run without a device using the fake backend:
+不接设备、使用假后端运行:
 
 ```bash
 BRIDGESCOPE_FAKE=1 cargo run -p bridgescope-desktop
 ```
 
-On Windows Command Prompt:
+Windows 命令提示符下:
 
 ```bat
 set BRIDGESCOPE_FAKE=1
 cargo run -p bridgescope-desktop
 ```
 
-## Quality checks
+## 质量检查
 
 ```bash
 cargo fmt --all --check
@@ -46,27 +48,27 @@ cargo test --workspace
 cargo build --workspace --release
 ```
 
-## Implemented workflows
+## 已实现的工作流
 
-- **Interactive Shell:** starts `adb -s SERIAL shell -tt`, streams keyboard input and ANSI output, and supports explicit close/reconnect. This initial adapter uses a fixed 80×24 remote PTY; remote stderr is usually merged and true remote resize awaits native ADB shell-v2.
-- **Screenshot:** captures with binary-safe `adb -s SERIAL exec-out screencap -p`, validates/decodes PNG off the UI thread, displays Fit/100% modes, copies the decoded image, and saves the original PNG.
-- **File manager:** browses remote directories, uploads and downloads files with explicit overwrite confirmation, supports cancellation, creates directories, renames entries, and deletes regular files only. Operations remain bound to the selected device generation and refresh the current listing after completion.
-- **Processes:** reads an online device's process table through ADB, showing PID, process name, user, state, CPU, memory, and resident memory. The snapshot refreshes every three seconds while the panel is visible and can also be refreshed manually.
-- **Performance:** samples CPU usage, load average, memory, storage, and battery metrics once per second while the panel is visible. The panel keeps the latest 60 samples and renders CPU, memory, and battery history as a lightweight chart.
-- **Network devices:** the Device Manager accepts an Android device host/IP and port directly through adb connect, keeps up to eight successful endpoints as local history, and allows reconnecting or forgetting saved endpoints. Device discovery runs once at startup and again only after an explicit refresh or network connection.
-- **Applications:** lists installed packages with launcher icons, shows package details (version, installer, permissions), and supports launch, force stop, clear data, freeze/unfreeze, and uninstall — every destructive action requires explicit confirmation.
-- **Logcat:** streams `logcat -v threadtime` live with per-level colors, severity and text filters, pause, autoscroll, and save-to-file. The stream starts automatically when the panel is opened and survives device switches.
-- **Layout inspector:** captures the foreground window hierarchy via `uiautomator dump`, renders it as a searchable view tree with per-node attributes, copyable node dumps, and XML export.
-- **WebView inspection:** discovers WebView DevTools sockets on the device, forwards a local port, lists debuggable pages, and opens them in the browser or the Chrome DevTools frontend.
+- **交互式终端:** 启动 `adb -s SERIAL shell -tt`,流式传输键盘输入与 ANSI 输出,支持显式关闭/重连。初始适配器使用固定 80×24 的远端 PTY;远端 stderr 通常已合并,真正的远端 resize 要等原生 ADB shell-v2。
+- **截图:** 以二进制安全的 `adb -s SERIAL exec-out screencap -p` 捕获,在 UI 线程之外校验/解码 PNG,提供适应/100% 两种显示模式,可复制解码后的图像,也可保存原始 PNG。
+- **文件管理器:** 浏览远端目录、上传与下载文件(覆盖需显式确认)、支持取消、创建目录、重命名条目、仅删除普通文件。操作始终绑定所选设备的代数,完成后刷新当前列表。
+- **进程:** 通过 ADB 读取在线设备的进程表,显示 PID、进程名、用户、状态、CPU、内存与常驻内存。面板可见时快照每三秒自动刷新,也可手动刷新。
+- **性能:** 面板可见时每秒采样一次 CPU 使用率、负载均衡、内存、存储与电池指标。面板保留最近 60 个采样,并以轻量图表渲染 CPU、内存与电池历史。
+- **网络设备:** 设备管理器直接接受 Android 设备的主机/IP 与端口进行 adb connect,保留最多八个成功端点作为本地历史,可重连或忘记已存端点。设备发现在启动时运行一次,之后只在显式刷新或网络连接后再次运行。
+- **应用:** 列出已安装包及其启动图标,显示包详情(版本、安装来源、权限),支持启动、强制停止、清除数据、冻结/解冻与卸载 — 每个破坏性操作都要求显式确认。
+- **Logcat:** 实时流式传输 `logcat -v threadtime`,按级别着色、严重度与文本过滤、暂停、自动滚动、保存到文件。面板打开时自动启动流,设备切换后仍保持。
+- **布局检查器:** 通过 `uiautomator dump` 捕获前台窗口层级,渲染为可搜索的视图树,带逐节点属性、可复制的节点 dump 与 XML 导出。
+- **WebView 检查:** 发现设备上的 WebView DevTools socket,转发本地端口,列出可调试页面,并可在浏览器或 Chrome DevTools 前端中打开。
 
-## Safety
+## 安全
 
-BridgeScope binds every structured operation to an explicit device serial and connection generation. Destructive capabilities will require backend-enforced confirmation. The interactive shell is an unrestricted expert feature; arbitrary Android shell commands cannot be made safe.
+BridgeScope 将每个结构化操作绑定到显式的设备序列号与连接代数。破坏性能力将由后端强制要求确认。交互式终端是不设限的专家功能;任意的 Android shell 命令无法做到安全化。
 
-## Independence
+## 独立性
 
-BridgeScope is not affiliated with AYA, Android, Google, or scrcpy. It does not copy AYA source code, branding, icons, translations, screenshots, or visual assets. See [`docs/clean-room.md`](docs/clean-room.md).
+BridgeScope 与 AYA、Android、Google 或 scrcpy 均无关联。它不复制 AYA 的源代码、品牌、图标、翻译、截图或视觉素材。见 [`docs/clean-room.md`](docs/clean-room.md)。
 
-## License
+## 许可
 
-BridgeScope source is available under either the MIT License or Apache License 2.0, at your option. Third-party artifacts retain their own licenses and notices.
+BridgeScope 源码在 MIT 许可或 Apache 许可 2.0 之下提供,由你自行选择。第三方工件保留其各自的许可与声明。

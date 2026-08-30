@@ -23,6 +23,7 @@ eframe = { version = "0.33.3", default-features = false, features = ["default_fo
 flate2 = "1.1.9"
 futures-util = { version = "0.3.33", default-features = false, features = ["std"] }
 image = { version = "0.25.10", default-features = false, features = ["png", "webp", "jpeg"] }
+mp4 = "0.14.0"
 openh264 = "0.9.8"
 quick-xml = "0.38.3"
 sha2 = "0.10.9"

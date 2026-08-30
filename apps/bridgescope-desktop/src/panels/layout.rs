@@ -220,9 +220,7 @@ fn render_node(
     let matches = filtered && node_matches(node, query);
     let label = node_label(language, node);
     let header = if matches {
-        RichText::new(label)
-            .strong()
-            .color(egui::Color32::from_rgb(250, 204, 21))
+        RichText::new(label).strong().color(crate::theme::ACCENT)
     } else {
         RichText::new(label)
     };

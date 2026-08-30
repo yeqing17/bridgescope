@@ -5,6 +5,7 @@ use bridgescope_domain::{
 use eframe::egui::{self, Color32};
 
 use crate::i18n::{Language, error_text, text};
+use crate::quick_commands::{self, QuickCommand, QuickCommandStore};
 
 const INITIAL_TERMINAL_ROWS: u16 = 24;
 const TERMINAL_COLUMNS: u16 = 80;
@@ -31,6 +32,8 @@ pub struct ShellPanelState {
     status: ShellStatus,
     error: Option<BridgeError>,
     focus_terminal: bool,
+    /// One-click commands (Xshell-style quick commands) for this panel.
+    pub quick_commands: QuickCommandStore,
 }
 
 impl Default for ShellPanelState {
@@ -43,6 +46,7 @@ impl Default for ShellPanelState {
             status: ShellStatus::Disconnected,
             error: None,
             focus_terminal: false,
+            quick_commands: QuickCommandStore::default(),
         }
     }
 }
@@ -117,6 +121,20 @@ impl ShellPanelState {
         Some(BackendCommand::WriteShell { session_id, input })
     }
 
+    /// Sends a quick command's bytes to the live session. Focusing the
+    /// terminal afterwards keeps the keyboard ready for follow-up input.
+    fn send_quick_command(&mut self, command: &QuickCommand) -> Vec<BackendCommand> {
+        if !self.connected() || !command.is_sendable() {
+            return Vec::new();
+        }
+        let commands = quick_commands::payload_chunks(command)
+            .into_iter()
+            .filter_map(|chunk| self.write(chunk))
+            .collect();
+        self.focus_terminal = true;
+        commands
+    }
+
     fn close(&mut self) -> Option<BackendCommand> {
         let session_id = self.session_id?;
         self.status = ShellStatus::Closing;
@@ -141,22 +159,29 @@ impl ShellPanelState {
 
 pub fn show(
     ui: &mut egui::Ui,
+    context: &egui::Context,
     language: Language,
     selected: Option<&DeviceRecord>,
     state: &mut ShellPanelState,
 ) -> Vec<BackendCommand> {
     let mut commands = state.reconcile_target(selected);
+    // The panel hint is too chatty to spend a permanent line on; it surfaces
+    // as a tooltip on the title instead.
     ui.horizontal(|ui| {
-        ui.heading(text(language, "shell_title"));
+        ui.heading(text(language, "shell_title"))
+            .on_hover_text(text(language, "shell_hint"));
         ui.separator();
         let (label, color) = status_style(language, state.status);
         ui.colored_label(color, label);
     });
-    ui.small(text(language, "shell_hint"));
-    ui.add_space(8.0);
+    ui.add_space(6.0);
 
     let online = selected.is_some_and(|record| record.descriptor.state.is_online());
-    ui.horizontal(|ui| {
+    let connected = state.connected();
+    // One wrapping row: session controls first, quick commands after a small
+    // separator, so both share the same line and the terminal keeps the rest
+    // of the panel.
+    ui.horizontal_wrapped(|ui| {
         if ui
             .add_enabled(
                 online && state.session_id.is_none(),
@@ -186,7 +211,19 @@ pub fn show(
         if ui.button(text(language, "shell_focus_terminal")).clicked() {
             state.focus_terminal = true;
         }
+        ui.separator();
+        // Quick commands: click to send. Disabled until a session is live.
+        for command in
+            quick_commands::show_inline(ui, language, &mut state.quick_commands, connected)
+        {
+            for command in state.send_quick_command(&command) {
+                commands.push(command);
+            }
+        }
     });
+    if state.quick_commands.manage_open {
+        quick_commands::show_manage_window(context, language, &mut state.quick_commands);
+    }
 
     if !online {
         ui.colored_label(
@@ -232,8 +269,21 @@ pub fn show(
         rect,
         state.parser.screen(),
         response.has_focus(),
+        state.status == ShellStatus::Disconnected,
     );
     commands
+}
+
+/// What a blank terminal area shows: the start-up guidance only before the
+/// first session — 清屏 on a live or finished session must not resurrect the
+/// "click connect" hint.
+fn screen_text(language: Language, screen: &vt100::Screen, disconnected: bool) -> String {
+    let contents = screen.contents();
+    if contents.is_empty() && disconnected {
+        text(language, "shell_empty_hint").to_owned()
+    } else {
+        contents
+    }
 }
 
 fn viewport_rows(ui: &egui::Ui, rect: egui::Rect) -> u16 {
@@ -327,7 +377,9 @@ fn append_text_input(output: &mut Vec<Vec<u8>>, text: &str) {
     }
 }
 
-fn append_terminal_input(output: &mut Vec<Vec<u8>>, mut bytes: &[u8]) {
+/// Also used by the quick-command feature so both input paths split at
+/// `MAX_SHELL_INPUT_BYTES` identically.
+pub(crate) fn append_terminal_input(output: &mut Vec<Vec<u8>>, mut bytes: &[u8]) {
     while !bytes.is_empty() {
         if output
             .last()
@@ -434,6 +486,7 @@ fn paint_terminal(
     rect: egui::Rect,
     screen: &vt100::Screen,
     focused: bool,
+    disconnected: bool,
 ) {
     let dark_mode = ui.visuals().dark_mode;
     let background = if dark_mode {
@@ -473,16 +526,13 @@ fn paint_terminal(
         ),
         egui::StrokeKind::Inside,
     );
-    let contents = screen.contents();
-    let text = if contents.is_empty() {
-        text(language, "shell_empty_hint").to_owned()
-    } else {
-        contents
-    };
+    let text = screen_text(language, screen, disconnected);
     let font_id = egui::FontId::monospace(TERMINAL_FONT_SIZE);
     let content_origin = rect.left_top() + egui::vec2(TERMINAL_PADDING, TERMINAL_PADDING);
     let galley = painter.layout_no_wrap(text, font_id.clone(), foreground);
-    painter.galley(content_origin, galley.clone(), foreground);
+    if !galley.is_empty() {
+        painter.galley(content_origin, galley.clone(), foreground);
+    }
     if !screen.hide_cursor() && focused {
         let (row, column) = screen.cursor_position();
         // `Screen::contents` omits blank grid rows while the VT cursor keeps
@@ -588,5 +638,25 @@ mod tests {
         state.parser.process(b"\x1b[3");
         state.parser.process(b"1mred\x1b[0m");
         assert!(state.parser.screen().contents().contains("red"));
+    }
+
+    #[test]
+    fn blank_screen_hints_only_before_the_first_session() {
+        let parser = vt100::Parser::new(4, TERMINAL_COLUMNS, SCROLLBACK_ROWS);
+        let screen = parser.screen();
+        // Never connected: the start-up guidance shows.
+        assert_eq!(
+            screen_text(Language::Chinese, screen, true),
+            text(Language::Chinese, "shell_empty_hint")
+        );
+        // Connected (清屏 or fresh session): the terminal stays blank.
+        assert_eq!(screen_text(Language::Chinese, screen, false), "");
+        // Output wins over both flags.
+        let mut with_output = vt100::Parser::new(4, TERMINAL_COLUMNS, SCROLLBACK_ROWS);
+        with_output.process(b"hello");
+        assert_eq!(
+            screen_text(Language::Chinese, with_output.screen(), false),
+            "hello"
+        );
     }
 }

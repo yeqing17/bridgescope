@@ -1,12 +1,14 @@
-# ADR 0001: Use a pure Rust egui desktop stack
+中文 | [English](../en/adr/0001-pure-rust-egui.md)
 
-- Status: Accepted
-- Date: 2026-07-25
+# ADR 0001:采用纯 Rust 的 egui 桌面技术栈
 
-## Decision
+- 状态:已接受
+- 日期:2026-07-25
 
-Use `eframe`/`egui` for the desktop interface and Rust for all host-side components. Do not use Electron, React, Tauri, or a Kotlin Android helper.
+## 决策
 
-## Consequences
+桌面界面使用 `eframe`/`egui`,主机侧组件全部使用 Rust。不使用 Electron、React、Tauri 或 Kotlin Android 辅助程序。
 
-The project has one primary language and direct control over lifecycle and memory. In exchange, terminal emulation, rich data grids, video decoding, accessibility, and Android Framework integration require more original engineering and broader platform testing. Unsupported device-side capabilities must be reported honestly rather than approximated with fabricated data.
+## 后果
+
+项目只有一种主语言,并直接掌控生命周期与内存。代价是:终端模拟、复杂数据表格、视频解码、无障碍、Android 框架集成都需要更多原创工程和更广的平台测试。设备端不支持的能力必须如实呈现,不得用编造的数据近似。

@@ -66,13 +66,14 @@ pub async fn read_stream_header(
 }
 
 /// Demuxes media packets until the stream ends or the token is cancelled,
-/// decoding each packet and handing completed frames to `on_frame`. Returns
-/// the decoded frame count; a server-side stream end counts as a normal stop.
+/// decoding each packet and handing the raw payload plus any decoded frame
+/// to `on_packet` (the recorder taps the raw access units). Returns the
+/// decoded frame count; a server-side stream end counts as a normal stop.
 pub async fn demux_packets(
     reader: &mut (impl tokio::io::AsyncRead + Unpin),
     decoder: &mut VideoDecoder,
     cancellation: &CancellationToken,
-    on_frame: &mut impl FnMut(RgbaFrame),
+    on_packet: &mut impl FnMut(&crate::protocol::PacketHeader, &[u8], Option<RgbaFrame>),
 ) -> Result<u64, SessionError> {
     let mut frames = 0u64;
     let mut header = [0u8; PACKET_HEADER_BYTES];
@@ -87,11 +88,12 @@ pub async fn demux_packets(
             return Ok(frames);
         }
         match decoder.decode(&payload) {
-            Ok(Some(frame)) => {
-                frames += 1;
-                on_frame(frame);
+            Ok(frame) => {
+                if frame.is_some() {
+                    frames += 1;
+                }
+                on_packet(&packet, &payload, frame);
             }
-            Ok(None) => {}
             Err(_) => return Err(SessionError::Protocol("decoder rejected the stream")),
         }
     }
@@ -161,14 +163,27 @@ mod tests {
         assert_eq!(header.metadata.height, 32);
 
         let mut decoder = VideoDecoder::new().expect("decoder");
-        let mut widths = Vec::new();
-        let frames = demux_packets(&mut stream, &mut decoder, &token(), &mut |frame| {
-            widths.push(frame.width);
-        })
+        let mut frames_seen = Vec::new();
+        let mut packets = Vec::new();
+        let frames = demux_packets(
+            &mut stream,
+            &mut decoder,
+            &token(),
+            &mut |packet, payload, frame| {
+                packets.push((*packet, payload.len()));
+                if let Some(frame) = frame {
+                    frames_seen.push(frame.width);
+                }
+            },
+        )
         .await
         .expect("demux");
         assert_eq!(frames, 1);
-        assert_eq!(widths, vec![32]);
+        assert_eq!(frames_seen, vec![32]);
+        // The fixture's single packet is a config + key-frame access unit.
+        assert_eq!(packets.len(), 1);
+        assert!(packets[0].0.config && packets[0].0.key_frame);
+        assert!(packets[0].1 > 0);
     }
 
     #[tokio::test]
@@ -190,7 +205,7 @@ mod tests {
         let mut stream = std::io::Cursor::new(bytes);
         read_stream_header(&mut stream).await.expect("header");
         let mut decoder = VideoDecoder::new().expect("decoder");
-        let frames = demux_packets(&mut stream, &mut decoder, &token(), &mut |_| {})
+        let frames = demux_packets(&mut stream, &mut decoder, &token(), &mut |_, _, _| {})
             .await
             .expect("demux");
         assert_eq!(frames, 0);
@@ -208,7 +223,7 @@ mod tests {
         let cancellation = token();
         let mut decoder = VideoDecoder::new().expect("decoder");
         cancellation.cancel();
-        let error = demux_packets(&mut stream, &mut decoder, &cancellation, &mut |_| {})
+        let error = demux_packets(&mut stream, &mut decoder, &cancellation, &mut |_, _, _| {})
             .await
             .expect_err("cancelled");
         assert!(matches!(error, SessionError::Cancelled));
