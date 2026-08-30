@@ -20,7 +20,7 @@ tests, and real-device acceptance flow pass.
 | Network devices | ✅ | `adb connect` + up to 8 remembered endpoints |
 | Fake device backend | ✅ | `FADB_FAKE=1` deterministic data |
 | Device overview | ✅ | model, battery, memory, storage |
-| Interactive Shell | ✅ | subprocess PTY (`adb shell -tt`), ANSI, resize |
+| Interactive Shell | ✅ | subprocess PTY (`adb shell -tt`), ANSI, resize, editable quick-command bar (JSON import/export) |
 | Screenshot | ✅ | binary-safe `exec-out screencap`, Fit/100%, save/copy |
 | AI assistant | ✅ | provider-neutral; OpenAI-compatible single-shot chat |
 | Logcat | ✅ | live stream, level colors/filter, search, save |
@@ -33,9 +33,9 @@ tests, and real-device acceptance flow pass.
 | WebView inspection | ✅ | DevTools sockets, page list, inspector URL |
 | AVD manager | ❌ | removed in 0.7.1: only managed SDK-emulator AVDs, which does not help users on third-party emulators (LDPlayer, MuMu, ...); launch/stop those from their own consoles |
 | Wireless debugging | ✅ | `adb pair` with code, `tcpip 5555` for the selected device, mDNS discovery with connect |
-| scrcpy screen mirror | ✅ | video-only forward-tunnel mirror of the selected device: adjustable max size / bitrate, pinned scrcpy server 3.3.4, openh264 decode to an egui texture, one mirror at a time, stop on device-side exit |
+| scrcpy screen mirror | ✅ | forward-tunnel mirror of the selected device: adjustable max size / bitrate, pinned scrcpy server 3.3.4, openh264 decode to an egui texture, one mirror at a time, stop on device-side exit; key rows remote-control via `input keyevent`; one-tap MP4 recording writes from the first keyframe |
 | AI streaming responses | ⏳ | SSE on the reserved provider surface |
-| Screen recording | 🧪 | evaluate after mirroring ships |
+| Screen recording | ✅ | delivered as one-tap MP4 recording inside the mirror panel (SPS/PPS passed through, microsecond timestamps), no `screenrecord` dependency; on a static screen the start waits for the next keyframe |
 | Pure Rust Android helper | ❌ | descoped, see roadmap |
 | Native ADB shell-v2 | ❌ | descoped, see roadmap |
 
@@ -71,10 +71,10 @@ Shipped in 0.7.0:
 
 ### Phase 3 — later
 
-- scrcpy phase 2: touch/key/text injection (control protocol).
+- scrcpy phase 2: touch/text injection (control protocol); key events already
+  ship via the `input keyevent` remote rows.
 - scrcpy phase 3: audio capture (Android 11+).
 - AI streaming responses (SSE) on the existing provider surface.
-- Screen recording (`screenrecord`) if mirroring leaves a gap.
 
 ### Descoped (decisions recorded 2026-08)
 

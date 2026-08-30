@@ -17,7 +17,7 @@
 | 网络设备 | ✅ | `adb connect` + 最多 8 个记忆端点 |
 | 假设备后端 | ✅ | `FADB_FAKE=1` 确定性数据 |
 | 设备概览 | ✅ | 型号、电池、内存、存储 |
-| 交互式终端 | ✅ | 子进程 PTY(`adb shell -tt`)、ANSI、resize |
+| 交互式终端 | ✅ | 子进程 PTY(`adb shell -tt`)、ANSI、resize、可编辑快捷指令栏(JSON 导入/导出) |
 | 截图 | ✅ | 二进制安全的 `exec-out screencap`、适应/100%、保存/复制 |
 | AI 助手 | ✅ | 提供方中立;OpenAI 兼容单轮对话 |
 | Logcat | ✅ | 实时流、级别着色/过滤、搜索、保存 |
@@ -30,9 +30,9 @@
 | WebView 检查 | ✅ | DevTools socket、页面列表、检查器 URL |
 | AVD 管理器 | ❌ | 0.7.1 移除:只能管理官方 SDK 模拟器的 AVD,对第三方模拟器(LDPlayer、MuMu 等)用户没有帮助;这些模拟器请从各自的控制台启动/停止 |
 | 无线调试 | ✅ | 带配对码的 `adb pair`、对所选设备一键 `tcpip 5555`、mDNS 发现并连接 |
-| scrcpy 投屏 | ✅ | 仅视频的转发隧道投屏所选设备:可调最大尺寸/码率、固定 scrcpy server 3.3.4、openh264 解码到 egui 纹理、同时仅一路投屏、设备端退出即停止 |
+| scrcpy 投屏 | ✅ | 转发隧道投屏所选设备:可调最大尺寸/码率、固定 scrcpy server 3.3.4、openh264 解码到 egui 纹理、同时仅一路投屏、设备端退出即停止;按键行经 `input keyevent` 遥控;一键 MP4 录像从首个关键帧开始写盘 |
 | AI 流式响应 | ⏳ | 在预留的提供方接口上实现 SSE |
-| 屏幕录制 | 🧪 | 投屏发布后再评估 |
+| 屏幕录制 | ✅ | 以投屏内一键 MP4 录像交付(SPS/PPS 直写、微秒时间戳),不依赖 `screenrecord`;画面静止时开始录像会等到下一个关键帧 |
 | 纯 Rust Android helper | ❌ | 已排除,见路线图 |
 | 原生 ADB shell-v2 | ❌ | 已排除,见路线图 |
 
@@ -56,10 +56,9 @@
 
 ### 阶段 3 — 以后
 
-- scrcpy 第二阶段:触摸/按键/文本注入(控制协议)。
+- scrcpy 第二阶段:触摸/文本注入(控制协议);按键已通过 `input keyevent` 遥控行交付。
 - scrcpy 第三阶段:音频采集(Android 11+)。
 - 在现有提供方接口上的 AI 流式响应(SSE)。
-- 若投屏留有空白,补屏幕录制(`screenrecord`)。
 
 ### 已排除(2026-08 记录决策)
 
