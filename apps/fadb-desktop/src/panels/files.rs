@@ -297,19 +297,16 @@ fn format_error(language: Language, error: &BridgeError) -> String {
 
 fn sort_entries(entries: &mut [RemoteFileEntry], key: SortKey, reverse: bool) {
     entries.sort_by(|left, right| {
-        let directory_first = u8::from(left.kind != RemoteFileKind::Directory)
-            .cmp(&u8::from(right.kind != RemoteFileKind::Directory));
         let ordering = match key {
             SortKey::Name => left.name.to_lowercase().cmp(&right.name.to_lowercase()),
             SortKey::Size => left.size_bytes.cmp(&right.size_bytes),
             SortKey::Modified => left.modified_unix_seconds.cmp(&right.modified_unix_seconds),
         };
-        let ordered = if reverse {
+        if reverse {
             ordering.reverse()
         } else {
             ordering
-        };
-        directory_first.then(ordered)
+        }
     });
 }
 
@@ -781,7 +778,7 @@ mod tests {
     }
 
     #[test]
-    fn sorts_entries_by_key_with_directories_first() {
+    fn sorts_entries_mixed_files_and_directories() {
         let mut entries = vec![
             entry("b.txt", RemoteFileKind::File, Some(2), Some(200)),
             entry("dir", RemoteFileKind::Directory, None, None),
@@ -789,13 +786,13 @@ mod tests {
         ];
         sort_entries(&mut entries, SortKey::Name, false);
         let names: Vec<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
-        assert_eq!(names, vec!["dir", "a.txt", "b.txt"]);
+        assert_eq!(names, vec!["a.txt", "b.txt", "dir"]);
         sort_entries(&mut entries, SortKey::Modified, false);
+        // None (unknown time) sorts before Some(..).
         assert_eq!(entries[0].name, "dir");
         assert_eq!(entries[1].name, "a.txt");
         sort_entries(&mut entries, SortKey::Modified, true);
-        assert_eq!(entries[0].name, "dir");
-        assert_eq!(entries[1].name, "b.txt");
+        assert_eq!(entries[0].name, "b.txt");
     }
 
     #[test]

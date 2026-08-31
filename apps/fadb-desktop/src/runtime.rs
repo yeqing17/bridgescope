@@ -303,6 +303,31 @@ async fn run_backend(
                         )
                         .await;
                     }
+                    BackendCommand::DisconnectDevice(endpoint) => {
+                        match transport.disconnect_endpoint(&endpoint).await {
+                            Ok(_) => {
+                                if refresh_devices(
+                                    transport.as_ref(),
+                                    &mut registry,
+                                    &events,
+                                    &context,
+                                )
+                                .await
+                                .is_ok()
+                                {
+                                    cancel_stale_transfers(&registry, &transfers);
+                                }
+                            }
+                            Err(error) => {
+                                send_event(
+                                    &events,
+                                    &context,
+                                    BackendEvent::OperationFailed(error),
+                                )
+                                .await;
+                            }
+                        }
+                    }
                     BackendCommand::ConnectDevice(endpoint) => {
                         send_event(
                             &events,

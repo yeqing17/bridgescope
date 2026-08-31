@@ -23,6 +23,9 @@ const RECENT_ENDPOINTS_STORAGE_KEY: &str = "fadb.recent_adb_endpoints";
 const AI_SETTINGS_STORAGE_KEY: &str = "fadb.ai_settings";
 const QUICK_COMMANDS_STORAGE_KEY: &str = "fadb.shell_quick_commands";
 const MAX_RECENT_ENDPOINTS: usize = 8;
+const SLOGAN: &str = "a featherweight ADB toolbox, in Rust";
+/// How long the pointer must rest on the logo before the slogan shows.
+const SLOGAN_HOVER_SECONDS: f32 = 1.5;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Panel {
@@ -98,6 +101,11 @@ pub struct FadbApp {
     /// Whether a window-resize BeginResize command was already sent for the
     /// current pointer press (see `handle_window_resize`).
     resize_sent: bool,
+    /// How long the pointer has hovered the top-bar logo, for the slogan
+    /// easter egg.
+    /// When the pointer started hovering the top-bar logo, for the slogan
+    /// easter egg (`None` while not hovering).
+    logo_hover_started: Option<std::time::Instant>,
     ai_form: assistant::AiSettingsForm,
     files: files::FilesPanelState,
     applications: applications::ApplicationsPanelState,
@@ -151,6 +159,7 @@ impl FadbApp {
             assistant: assistant::AssistantPanelState::default(),
             assistant_open: false,
             resize_sent: false,
+            logo_hover_started: None,
             ai_form: assistant::AiSettingsForm::from_settings(stored_ai.as_ref()),
             files: files::FilesPanelState::default(),
             applications: applications::ApplicationsPanelState::default(),
@@ -568,9 +577,23 @@ impl FadbApp {
                     .spacing([24.0, 6.0])
                     .show(ui, |ui| {
                         ui.label(text(self.language, "diagnostics"));
-                        if ui.button(text(self.language, "open")).clicked() {
-                            self.windows.diagnostics = true;
-                        }
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                self.adb_path
+                                    .as_deref()
+                                    .unwrap_or(text(self.language, "unknown")),
+                            );
+                            // Toggle: click once to expand the ADB details
+                            // window, click again to close it.
+                            let label = if self.windows.diagnostics {
+                                text(self.language, "hide")
+                            } else {
+                                text(self.language, "details")
+                            };
+                            if ui.button(label).clicked() {
+                                self.windows.diagnostics = !self.windows.diagnostics;
+                            }
+                        });
                         ui.end_row();
                     });
                 ui.add_space(8.0);
@@ -598,6 +621,7 @@ impl FadbApp {
     /// The top bar doubles as the window's title bar: the window is
     /// undecorated, so dragging it moves the window, double-clicking toggles
     /// maximize, and the window controls (— □ ✕) live at its right end.
+    #[allow(clippy::too_many_lines)]
     fn top_bar(&mut self, context: &egui::Context) {
         egui::TopBottomPanel::top("top-bar").show(context, |ui| {
             // Register the drag zone first so the interactive widgets added
@@ -622,14 +646,7 @@ impl FadbApp {
                 .inner_margin(egui::Margin::symmetric(12, 5))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        logo(ui, 22.0);
-                        // Not selectable: selectable text would swallow the
-                        // drag and turn window-moves into text selections.
-                        ui.add(
-                            egui::Label::new(RichText::new("Fadb").size(20.0).strong())
-                                .selectable(false),
-                        );
-                        ui.add_space(10.0);
+                        self.brand_with_slogan(ui);
 
                         let selected_text = self.selected_record().map_or_else(
                             || text(self.language, "select_device").to_owned(),
@@ -700,6 +717,48 @@ impl FadbApp {
                     });
                 });
         });
+    }
+
+    /// Logo plus app name; hovering the logo for a while reveals the project
+    /// slogan as an easter egg.
+    fn brand_with_slogan(&mut self, ui: &mut egui::Ui) {
+        let logo_response = logo(ui, 22.0);
+        // Pure geometry: widget hover can be swallowed by the title-bar drag
+        // zone registered over this area, a rect test cannot. Wall-clock
+        // timing, because egui's smoothed frame delta under-counts when the
+        // app wakes up from an idle state.
+        if ui.rect_contains_pointer(logo_response.rect) {
+            let hovering_since = self
+                .logo_hover_started
+                .get_or_insert(std::time::Instant::now());
+            let elapsed = hovering_since.elapsed().as_secs_f32();
+            if elapsed <= SLOGAN_HOVER_SECONDS {
+                // The idle app does not repaint, so the hover state would
+                // never be re-evaluated without asking for frames explicitly.
+                // Once the slogan is up the polling stops: any pointer
+                // movement wakes the loop on its own, so hovering costs
+                // nothing beyond the first second and a half.
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(100));
+            }
+            if elapsed > SLOGAN_HOVER_SECONDS {
+                egui::containers::Tooltip::always_open(
+                    ui.ctx().clone(),
+                    ui.layer_id(),
+                    ui.id().with("logo-slogan"),
+                    logo_response.rect,
+                )
+                .show(|ui| {
+                    ui.label(RichText::new(SLOGAN).weak());
+                });
+            }
+        } else {
+            self.logo_hover_started = None;
+        }
+        // Not selectable: selectable text would swallow the drag and turn
+        // window-moves into text selections.
+        ui.add(egui::Label::new(RichText::new("Fadb").size(20.0).strong()).selectable(false));
+        ui.add_space(28.0);
     }
 
     fn side_bar(&mut self, context: &egui::Context) {
@@ -1068,7 +1127,7 @@ impl FadbApp {
                 } else {
                     egui::Grid::new("device-manager-grid")
                         .striped(true)
-                        .num_columns(5)
+                        .num_columns(6)
                         .show(ui, |ui| {
                             ui.strong(text(self.language, "model"));
                             ui.strong(text(self.language, "serial"));
@@ -1091,6 +1150,17 @@ impl FadbApp {
                                     self.send(BackendCommand::SelectDevice(Some(
                                         record.descriptor.serial.clone(),
                                     )));
+                                }
+                                // Network devices (serial is host:port) get a
+                                // disconnect button; USB serials cannot be
+                                // disconnected.
+                                if let Some(endpoint) =
+                                    record.descriptor.serial.as_str().rsplit_once(':').and_then(
+                                        |(host, port)| AdbEndpoint::parse_target(host, port),
+                                    )
+                                    && ui.button(text(self.language, "disconnect")).clicked()
+                                {
+                                    self.send(BackendCommand::DisconnectDevice(endpoint));
                                 }
                                 ui.end_row();
                             }
@@ -1317,13 +1387,13 @@ fn close_button(ui: &mut egui::Ui, tooltip: &str, bar_height: f32) -> egui::Resp
 /// The Fadb logo tile from `assets/` (same mark as the taskbar and exe
 /// icon). Decoded once and cached as a texture on the context, so both the
 /// title bar and the assistant dock share it.
-pub(crate) fn logo(ui: &mut egui::Ui, size: f32) {
+pub(crate) fn logo(ui: &mut egui::Ui, size: f32) -> egui::Response {
     let texture = logo_texture(ui.ctx());
     ui.add(
         egui::Image::from_texture(&texture)
             .max_size(egui::vec2(size, size))
             .corner_radius(size * 0.22),
-    );
+    )
 }
 
 fn logo_texture(ctx: &egui::Context) -> egui::TextureHandle {

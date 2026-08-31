@@ -324,6 +324,10 @@ impl AdbTransport for FakeAdbTransport {
         Ok(format!("connected to {}", endpoint.adb_target()))
     }
 
+    async fn disconnect_endpoint(&self, endpoint: &AdbEndpoint) -> Result<String, BridgeError> {
+        Ok(format!("disconnected {}", endpoint.adb_target()))
+    }
+
     async fn device_overview(&self, serial: &DeviceSerial) -> Result<DeviceOverview, BridgeError> {
         let devices = self.devices.read().await;
         let device = devices.get(serial).ok_or_else(|| {

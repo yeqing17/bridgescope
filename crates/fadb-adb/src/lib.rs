@@ -105,6 +105,9 @@ pub trait AdbTransport: Send + Sync {
     async fn version(&self) -> Result<String, BridgeError>;
     async fn list_devices(&self) -> Result<Vec<DeviceDescriptor>, BridgeError>;
     async fn connect_endpoint(&self, endpoint: &AdbEndpoint) -> Result<String, BridgeError>;
+    /// Disconnect a network device (`adb disconnect host:port`); USB serials
+    /// are rejected by the caller.
+    async fn disconnect_endpoint(&self, endpoint: &AdbEndpoint) -> Result<String, BridgeError>;
     async fn device_overview(&self, serial: &DeviceSerial) -> Result<DeviceOverview, BridgeError>;
     async fn list_processes(&self, serial: &DeviceSerial) -> Result<Vec<ProcessInfo>, BridgeError>;
     async fn list_applications(
@@ -336,6 +339,10 @@ impl AdbTransport for ProcessAdbTransport {
 
     async fn connect_endpoint(&self, endpoint: &AdbEndpoint) -> Result<String, BridgeError> {
         self.run(connect_arguments(endpoint)).await
+    }
+
+    async fn disconnect_endpoint(&self, endpoint: &AdbEndpoint) -> Result<String, BridgeError> {
+        self.run(disconnect_arguments(endpoint)).await
     }
 
     async fn device_overview(&self, serial: &DeviceSerial) -> Result<DeviceOverview, BridgeError> {
@@ -909,6 +916,13 @@ fn parse_wifi_ssid(output: &str) -> Option<String> {
 fn connect_arguments(endpoint: &AdbEndpoint) -> [OsString; 2] {
     [
         OsString::from("connect"),
+        OsString::from(endpoint.adb_target()),
+    ]
+}
+
+fn disconnect_arguments(endpoint: &AdbEndpoint) -> [OsString; 2] {
+    [
+        OsString::from("disconnect"),
         OsString::from(endpoint.adb_target()),
     ]
 }

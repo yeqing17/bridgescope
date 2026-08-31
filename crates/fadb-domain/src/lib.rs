@@ -1,4 +1,4 @@
-use std::{fmt, net::IpAddr, path::PathBuf};
+use std::{fmt, net::IpAddr, path::PathBuf, str::FromStr};
 
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
@@ -233,6 +233,16 @@ impl AdbEndpoint {
         } else {
             format!("{}:{}", self.host, self.port)
         }
+    }
+
+    /// Parses a `host:port` target string, e.g. a network device serial.
+    ///
+    /// Returns `None` when the port is not a valid `u16` or the host is
+    /// rejected by `AdbEndpoint::new`.
+    #[must_use]
+    pub fn parse_target(host: &str, port: &str) -> Option<Self> {
+        let port = u16::from_str(port).ok()?;
+        Self::new(host, port).ok()
     }
 }
 
@@ -930,6 +940,7 @@ impl fmt::Debug for AiSettings {
 pub enum BackendCommand {
     RefreshDevices,
     ConnectDevice(AdbEndpoint),
+    DisconnectDevice(AdbEndpoint),
     SelectDevice(Option<DeviceSerial>),
     LoadOverview(DeviceSerial),
     LoadProcesses(DeviceTarget),
