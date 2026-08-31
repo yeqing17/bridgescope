@@ -2,7 +2,7 @@
 
 本文件记录 fadb 桌面应用每个版本的可见变化,格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/),版本号遵循语义化版本。每个版本对应仓库里的 `v*` 标签;更早的零散发布(BridgeScope 时期 0.4.x—0.6.x)不再逐条回填,可在 [Releases 页面](https://github.com/yeqing17/fadb/releases)按标签查看。
 
-## [未发布]
+## [0.8.4] - 2026-09-01
 
 ### 新增
 
