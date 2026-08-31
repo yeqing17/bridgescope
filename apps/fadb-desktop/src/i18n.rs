@@ -6,22 +6,6 @@ pub enum Language {
     Chinese,
 }
 
-impl Language {
-    pub const fn toggle(self) -> Self {
-        match self {
-            Self::English => Self::Chinese,
-            Self::Chinese => Self::English,
-        }
-    }
-
-    pub const fn short_name(self) -> &'static str {
-        match self {
-            Self::English => "EN",
-            Self::Chinese => "中文",
-        }
-    }
-}
-
 #[allow(clippy::match_same_arms, clippy::too_many_lines)]
 pub fn text(language: Language, key: &str) -> &'static str {
     match (language, key) {
@@ -60,12 +44,26 @@ pub fn text(language: Language, key: &str) -> &'static str {
         (Language::Chinese, "no_device") => "未连接设备",
         (Language::Chinese, "refresh") => "刷新",
         (Language::Chinese, "device_manager") => "设备管理",
-        (Language::Chinese, "diagnostics") => "ADB 诊断",
+        (Language::Chinese, "diagnostics") => "ADB 信息",
+        (Language::Chinese, "appearance") => "外观",
+        (Language::Chinese, "theme") => "主题",
+        (Language::Chinese, "language") => "语言",
+        (Language::Chinese, "open") => "打开",
+        (Language::Chinese, "adb_executable") => "ADB 可执行文件",
+        (Language::Chinese, "version") => "版本",
+        (Language::Chinese, "detected_devices") => "已检测到的设备",
+        (Language::Chinese, "unknown") => "未知",
+        (Language::Chinese, "adb_not_available") => "不可用；可能启用了模拟数据",
+        (Language::Chinese, "adb_env_hint") => {
+            "设置 FADB_ADB 可指定 adb 可执行文件路径；设置 FADB_FAKE=1 可启用确定性开发数据。"
+        }
         (Language::Chinese, "coming_soon") => "后续里程碑开发",
         (Language::Chinese, "explicit_selection") => "为避免误操作，Fadb 不会自动选择设备。",
         (Language::Chinese, "loading") => "正在读取设备信息…",
         (Language::Chinese, "light") => "浅色",
         (Language::Chinese, "dark") => "深色",
+        (Language::Chinese, "settings") => "设置",
+        (Language::Chinese, "about") => "关于",
         (Language::Chinese, "close") => "关闭",
         (Language::Chinese, "fake") => "模拟设备",
         (Language::Chinese, "connect_android") => "连接 Android 设备",
@@ -462,7 +460,19 @@ pub fn text(language: Language, key: &str) -> &'static str {
         (_, "no_device") => "No connected devices",
         (_, "refresh") => "Refresh",
         (_, "device_manager") => "Device Manager",
-        (_, "diagnostics") => "ADB Diagnostics",
+        (_, "diagnostics") => "ADB Info",
+        (_, "appearance") => "Appearance",
+        (_, "theme") => "Theme",
+        (_, "language") => "Language",
+        (_, "open") => "Open",
+        (_, "adb_executable") => "ADB executable",
+        (_, "version") => "Version",
+        (_, "detected_devices") => "Detected devices",
+        (_, "unknown") => "Unknown",
+        (_, "adb_not_available") => "Not available; fake fallback may be active",
+        (_, "adb_env_hint") => {
+            "Set FADB_ADB to choose an explicit adb executable. Set FADB_FAKE=1 for deterministic development data."
+        }
         (_, "coming_soon") => "Planned for a later milestone",
         (_, "explicit_selection") => {
             "Fadb never selects a device automatically, preventing accidental operations."
@@ -470,6 +480,8 @@ pub fn text(language: Language, key: &str) -> &'static str {
         (_, "loading") => "Loading device information…",
         (_, "light") => "Light",
         (_, "dark") => "Dark",
+        (_, "settings") => "Settings",
+        (_, "about") => "About",
         (_, "close") => "Close",
         (_, "fake") => "Fake device",
         (_, "connect_android") => "Connect an Android device",

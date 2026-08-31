@@ -72,10 +72,13 @@ impl Panel {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+// Dev hooks add more flags to the (already small) set of plain bools.
+#[allow(clippy::struct_excessive_bools)]
 struct WindowState {
     devices: bool,
     diagnostics: bool,
     ai_settings: bool,
+    settings: bool,
 }
 
 // Dev hooks add one more flag to the (already small) set of plain bools.
@@ -92,6 +95,9 @@ pub struct FadbApp {
     /// window. In-window on purpose: no second OS window, so no flashing,
     /// Alt+Tab duplication, or window-ownership hacks.
     assistant_open: bool,
+    /// Whether a window-resize BeginResize command was already sent for the
+    /// current pointer press (see `handle_window_resize`).
+    resize_sent: bool,
     ai_form: assistant::AiSettingsForm,
     files: files::FilesPanelState,
     applications: applications::ApplicationsPanelState,
@@ -144,6 +150,7 @@ impl FadbApp {
             screenshot: screenshot::ScreenshotPanelState::default(),
             assistant: assistant::AssistantPanelState::default(),
             assistant_open: false,
+            resize_sent: false,
             ai_form: assistant::AiSettingsForm::from_settings(stored_ai.as_ref()),
             files: files::FilesPanelState::default(),
             applications: applications::ApplicationsPanelState::default(),
@@ -481,23 +488,111 @@ impl FadbApp {
             }
             ui.add_space(6.0);
 
-            if ui.button(self.language.short_name()).clicked() {
-                self.language = self.language.toggle();
-            }
-            let theme_label = if self.dark_mode {
-                text(self.language, "light")
-            } else {
-                text(self.language, "dark")
-            };
-            if ui.button(theme_label).clicked() {
-                self.dark_mode = !self.dark_mode;
-                context.set_theme(if self.dark_mode {
-                    egui::ThemePreference::Dark
-                } else {
-                    egui::ThemePreference::Light
-                });
+            // Settings live in their own window (theme, language, ADB info,
+            // about) behind one gear button.
+            if ui
+                .add(
+                    egui::Button::new(egui::RichText::new("⚙").size(14.0))
+                        .selected(self.windows.settings),
+                )
+                .on_hover_text(text(self.language, "settings"))
+                .clicked()
+            {
+                self.windows.settings = !self.windows.settings;
             }
         });
+    }
+
+    /// The settings window: grouped rows for appearance, ADB info and about,
+    /// opened from the gear button in the top bar.
+    fn settings_window(&mut self, context: &egui::Context) {
+        let mut open = self.windows.settings;
+        egui::Window::new(text(self.language, "settings"))
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(context, |ui| {
+                ui.set_min_width(320.0);
+
+                ui.label(
+                    egui::RichText::new(text(self.language, "appearance"))
+                        .strong()
+                        .small(),
+                );
+                ui.add_space(4.0);
+                egui::Grid::new("settings-appearance")
+                    .num_columns(2)
+                    .spacing([24.0, 6.0])
+                    .show(ui, |ui| {
+                        ui.label(text(self.language, "theme"));
+                        ui.horizontal(|ui| {
+                            if ui
+                                .selectable_label(!self.dark_mode, text(self.language, "light"))
+                                .clicked()
+                                && self.dark_mode
+                            {
+                                self.dark_mode = false;
+                                context.set_theme(egui::ThemePreference::Light);
+                            }
+                            if ui
+                                .selectable_label(self.dark_mode, text(self.language, "dark"))
+                                .clicked()
+                                && !self.dark_mode
+                            {
+                                self.dark_mode = true;
+                                context.set_theme(egui::ThemePreference::Dark);
+                            }
+                        });
+                        ui.end_row();
+
+                        ui.label(text(self.language, "language"));
+                        ui.horizontal(|ui| {
+                            let is_chinese = self.language == Language::Chinese;
+                            if ui.selectable_label(is_chinese, "中文").clicked() && !is_chinese {
+                                self.language = Language::Chinese;
+                            }
+                            if ui.selectable_label(!is_chinese, "English").clicked() && is_chinese {
+                                self.language = Language::English;
+                            }
+                        });
+                        ui.end_row();
+                    });
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(4.0);
+
+                ui.label(egui::RichText::new("ADB").strong().small());
+                ui.add_space(4.0);
+                egui::Grid::new("settings-adb")
+                    .num_columns(2)
+                    .spacing([24.0, 6.0])
+                    .show(ui, |ui| {
+                        ui.label(text(self.language, "diagnostics"));
+                        if ui.button(text(self.language, "open")).clicked() {
+                            self.windows.diagnostics = true;
+                        }
+                        ui.end_row();
+                    });
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(4.0);
+
+                ui.label(
+                    egui::RichText::new(text(self.language, "about"))
+                        .strong()
+                        .small(),
+                );
+                ui.add_space(4.0);
+                egui::Grid::new("settings-about")
+                    .num_columns(2)
+                    .spacing([24.0, 6.0])
+                    .show(ui, |ui| {
+                        ui.label(concat!("Fadb v", env!("CARGO_PKG_VERSION")));
+                        ui.hyperlink_to("GitHub", "https://github.com/yeqing17/fadb");
+                        ui.end_row();
+                    });
+            });
+        self.windows.settings = open;
     }
 
     /// The top bar doubles as the window's title bar: the window is
@@ -512,7 +607,9 @@ impl FadbApp {
                 ui.id().with("title-bar-drag"),
                 egui::Sense::drag(),
             );
-            if title_bar.drag_started() {
+            // Edge seams win over the title-bar drag: dragging the top edge or
+            // the top corners should resize the window, not move it.
+            if title_bar.drag_started() && seam_direction(ui.ctx()).is_none() {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
             if title_bar.double_clicked() {
@@ -588,11 +685,6 @@ impl FadbApp {
                             text(self.language, "device_manager"),
                             &mut self.windows.devices,
                         );
-                        window_toggle_button(
-                            ui,
-                            text(self.language, "diagnostics"),
-                            &mut self.windows.diagnostics,
-                        );
                         if ui
                             .add(
                                 egui::Button::new(text(self.language, "assistant"))
@@ -632,9 +724,6 @@ impl FadbApp {
                             }
                         }
                     });
-                ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                    ui.small(concat!("Fadb v", env!("CARGO_PKG_VERSION")));
-                });
             });
     }
 
@@ -1017,14 +1106,26 @@ impl FadbApp {
             .open(&mut open)
             .default_width(620.0)
             .show(context, |ui| {
-                ui.strong("ADB executable");
-                ui.label(self.adb_path.as_deref().unwrap_or("Not available; fake fallback may be active"));
+                ui.strong(text(self.language, "adb_executable"));
+                ui.label(
+                    self.adb_path
+                        .as_deref()
+                        .unwrap_or(text(self.language, "adb_not_available")),
+                );
                 ui.add_space(8.0);
-                ui.strong("Version");
-                ui.label(self.adb_version.as_deref().unwrap_or("Unknown"));
+                ui.strong(text(self.language, "version"));
+                ui.label(
+                    self.adb_version
+                        .as_deref()
+                        .unwrap_or(text(self.language, "unknown")),
+                );
                 ui.add_space(8.0);
-                ui.label(format!("Detected devices: {}", self.snapshot.devices.len()));
-                ui.small("Set FADB_ADB to choose an explicit adb executable. Set FADB_FAKE=1 for deterministic development data.");
+                ui.label(format!(
+                    "{}: {}",
+                    text(self.language, "detected_devices"),
+                    self.snapshot.devices.len()
+                ));
+                ui.small(text(self.language, "adb_env_hint"));
             });
         self.windows.diagnostics = open;
     }
@@ -1043,7 +1144,7 @@ impl eframe::App for FadbApp {
             self.windows.ai_settings = true;
             self.assistant.open_settings = false;
         }
-        handle_window_resize(context);
+        handle_window_resize(context, &mut self.resize_sent);
         self.top_bar(context);
         self.side_bar(context);
         if self.assistant_open {
@@ -1061,6 +1162,9 @@ impl eframe::App for FadbApp {
         }
         if self.windows.diagnostics {
             self.diagnostics(context);
+        }
+        if self.windows.settings {
+            self.settings_window(context);
         }
     }
 
@@ -1132,20 +1236,42 @@ fn load_ai_settings(storage: Option<&dyn eframe::Storage>) -> Option<AiSettings>
 
 /// Undecorated windows lose the OS resize frame; re-create it with invisible
 /// drag zones along the window edges (corners included).
-fn handle_window_resize(context: &egui::Context) {
-    if context.input(|input| input.viewport().maximized.unwrap_or(false)) {
-        return;
-    }
-    let Some(pos) = context.pointer_hover_pos() else {
-        return;
-    };
-    let Some(direction) = resize_direction(pos, context.content_rect()) else {
+/// Begin the OS resize drag at most once per pointer press: when the native
+/// resize loop exits, winit posts a synthetic button-up that egui may see one
+/// frame late, and an unconditional re-send would immediately re-enter the
+/// resize loop with the button already released (the "stuck resizing" bug).
+fn handle_window_resize(context: &egui::Context, resize_sent: &mut bool) {
+    let Some(direction) = seam_direction(context) else {
         return;
     };
     context.set_cursor_icon(seam_cursor(direction));
-    if context.input(|input| input.pointer.is_decidedly_dragging()) {
+    let (dragging, primary_down) = context.input(|input| {
+        (
+            input.pointer.is_decidedly_dragging(),
+            input.pointer.primary_down(),
+        )
+    });
+    // Latch only while a gesture is actively dragging; the moment it is not
+    // (button up, or pressed but not yet moved) the latch clears, so a
+    // swallowed send can never poison later gestures.
+    if !primary_down || !dragging {
+        *resize_sent = false;
+        return;
+    }
+    if !*resize_sent {
+        *resize_sent = true;
         context.send_viewport_cmd(egui::ViewportCommand::BeginResize(direction));
     }
+}
+
+/// Which resize seam the pointer currently sits in, if any.
+fn seam_direction(context: &egui::Context) -> Option<egui::ResizeDirection> {
+    if context.input(|input| input.viewport().maximized.unwrap_or(false)) {
+        return None;
+    }
+    context
+        .pointer_hover_pos()
+        .and_then(|pos| resize_direction(pos, context.content_rect()))
 }
 
 /// One of the three window-control buttons in the title bar.
@@ -1219,7 +1345,7 @@ fn logo_texture(ctx: &egui::Context) -> egui::TextureHandle {
 }
 
 /// Invisible thickness of the window's resize seams, in points.
-const RESIZE_SEAM_THICKNESS: f32 = 6.0;
+const RESIZE_SEAM_THICKNESS: f32 = 8.0;
 
 /// Which resize direction a pointer position corresponds to, when it sits in
 /// an edge or corner seam of the given screen rect.

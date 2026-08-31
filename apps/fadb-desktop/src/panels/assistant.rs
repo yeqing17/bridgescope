@@ -250,12 +250,18 @@ fn composer(
         egui::TextEdit::multiline(&mut state.input)
             .hint_text(text(language, "assistant_input_hint"))
             .desired_rows(3)
-            .desired_width(ui.available_width()),
+            .desired_width(ui.available_width())
+            // Shift+Enter is the only way to insert a newline; plain Enter is
+            // reserved for sending.
+            .return_key(egui::KeyboardShortcut::new(
+                egui::Modifiers::SHIFT,
+                egui::Key::Enter,
+            )),
     );
     // Enter sends; Shift+Enter inserts a newline like in every chat app.
-    let submit = response.lost_focus()
-        && ui.input(|input| input.key_pressed(egui::Key::Enter) && !input.modifiers.shift)
-        && can_send;
+    let submit = can_send
+        && response.has_focus()
+        && ui.input(|input| input.key_pressed(egui::Key::Enter) && !input.modifiers.shift);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let send = egui::Button::new(
             egui::RichText::new(text(language, "assistant_send"))
