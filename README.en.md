@@ -21,7 +21,7 @@ fadb is an independently implemented, pure-Rust desktop toolkit for inspecting a
 ## Prerequisites
 
 - Rust 1.90
-- Android SDK Platform Tools (`adb`) available through `PATH`, `ANDROID_SDK_ROOT`, or `ANDROID_HOME`
+- Android SDK Platform Tools (`adb`) available through `PATH`, `ANDROID_SDK_ROOT`, or `ANDROID_HOME`. Alternatively, set `FADB_ADB` to the direct path of the `adb` executable — it takes precedence over the search above, and when it points at a missing file Fadb reports the error prominently instead of silently falling back. If you do not have adb yet, the ADB section of the settings window links the official download page
 - Windows, macOS, or Linux desktop build prerequisites for `eframe`
 
 ## Run

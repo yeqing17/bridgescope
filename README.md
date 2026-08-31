@@ -21,7 +21,7 @@ fadb 是一个独立实现的纯 Rust 桌面工具集,通过 ADB 检查与管理
 ## 前置要求
 
 - Rust 1.90
-- Android SDK Platform Tools(`adb`),通过 `PATH`、`ANDROID_SDK_ROOT` 或 `ANDROID_HOME` 可用
+- Android SDK Platform Tools(`adb`),通过 `PATH`、`ANDROID_SDK_ROOT` 或 `ANDROID_HOME` 可用;也可以设置 `FADB_ADB` 直接指定 `adb` 可执行文件路径 — 它优先于上述查找,若指向不存在的文件,Fadb 会在界面明确报错而不是静默回退。还没有 adb 时,设置窗口的 ADB 区域提供官方下载入口
 - Windows、macOS 或 Linux 上 `eframe` 的桌面构建依赖
 
 ## 运行
