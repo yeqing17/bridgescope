@@ -8,7 +8,7 @@ use fadb_domain::{
 };
 
 use crate::{
-    i18n::{Language, text},
+    i18n::{Language, adb_download_url, error_title, text},
     panels::{
         applications, assistant, files, layout, logcat, mirror, overview, performance, processes,
         screenshot, shell, webview,
@@ -26,6 +26,12 @@ const MAX_RECENT_ENDPOINTS: usize = 8;
 const SLOGAN: &str = "a featherweight ADB toolbox, in Rust";
 /// How long the pointer must rest on the logo before the slogan shows.
 const SLOGAN_HOVER_SECONDS: f32 = 1.5;
+/// Width of the left navigation panel. The top bar aligns the device
+/// selector's left edge to this boundary, so the two must share the
+/// constant.
+const NAVIGATION_WIDTH: f32 = 150.0;
+/// Horizontal inner margin of the top-bar frame.
+const TOP_BAR_MARGIN_X: i8 = 12;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Panel {
@@ -523,14 +529,15 @@ impl FadbApp {
             .show(context, |ui| {
                 ui.set_min_width(320.0);
 
-                ui.label(
-                    egui::RichText::new(text(self.language, "appearance"))
-                        .strong()
-                        .small(),
-                );
+                ui.label(egui::RichText::new(text(self.language, "appearance")).strong());
                 ui.add_space(4.0);
+                // The three section grids share min_col_width so their second
+                // column starts at the same x; without it each grid sizes the
+                // label column to its own widest label and the rows visibly
+                // stagger across sections.
                 egui::Grid::new("settings-appearance")
                     .num_columns(2)
+                    .min_col_width(80.0)
                     .spacing([24.0, 6.0])
                     .show(ui, |ui| {
                         ui.label(text(self.language, "theme"));
@@ -570,44 +577,18 @@ impl FadbApp {
                 ui.separator();
                 ui.add_space(4.0);
 
-                ui.label(egui::RichText::new("ADB").strong().small());
+                ui.label(egui::RichText::new("ADB").strong());
                 ui.add_space(4.0);
-                egui::Grid::new("settings-adb")
-                    .num_columns(2)
-                    .spacing([24.0, 6.0])
-                    .show(ui, |ui| {
-                        ui.label(text(self.language, "diagnostics"));
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                self.adb_path
-                                    .as_deref()
-                                    .unwrap_or(text(self.language, "unknown")),
-                            );
-                            // Toggle: click once to expand the ADB details
-                            // window, click again to close it.
-                            let label = if self.windows.diagnostics {
-                                text(self.language, "hide")
-                            } else {
-                                text(self.language, "details")
-                            };
-                            if ui.button(label).clicked() {
-                                self.windows.diagnostics = !self.windows.diagnostics;
-                            }
-                        });
-                        ui.end_row();
-                    });
+                self.settings_adb_grid(ui);
                 ui.add_space(8.0);
                 ui.separator();
                 ui.add_space(4.0);
 
-                ui.label(
-                    egui::RichText::new(text(self.language, "about"))
-                        .strong()
-                        .small(),
-                );
+                ui.label(egui::RichText::new(text(self.language, "about")).strong());
                 ui.add_space(4.0);
                 egui::Grid::new("settings-about")
                     .num_columns(2)
+                    .min_col_width(80.0)
                     .spacing([24.0, 6.0])
                     .show(ui, |ui| {
                         ui.label(concat!("Fadb v", env!("CARGO_PKG_VERSION")));
@@ -616,6 +597,49 @@ impl FadbApp {
                     });
             });
         self.windows.settings = open;
+    }
+
+    /// The ADB section of the settings window: detection state, the details
+    /// toggle and the official download entry.
+    fn settings_adb_grid(&mut self, ui: &mut egui::Ui) {
+        egui::Grid::new("settings-adb")
+            .num_columns(2)
+            .min_col_width(80.0)
+            .spacing([24.0, 6.0])
+            .show(ui, |ui| {
+                ui.label(text(self.language, "diagnostics"));
+                ui.horizontal(|ui| {
+                    button_aligned_label(
+                        ui,
+                        self.adb_path
+                            .as_deref()
+                            .unwrap_or(text(self.language, "unknown")),
+                    );
+                    // Toggle: click once to expand the ADB details window,
+                    // click again to close it.
+                    let label = if self.windows.diagnostics {
+                        text(self.language, "hide")
+                    } else {
+                        text(self.language, "details")
+                    };
+                    if ui.button(label).clicked() {
+                        self.windows.diagnostics = !self.windows.diagnostics;
+                    }
+                });
+                ui.end_row();
+                // The download entry lives here too: someone without adb
+                // should not have to open the details window to learn where
+                // to get it.
+                ui.label(text(self.language, "adb_download"));
+                if ui
+                    .button(text(self.language, "adb_download_link"))
+                    .clicked()
+                {
+                    ui.ctx()
+                        .open_url(egui::OpenUrl::new_tab(adb_download_url(self.language)));
+                }
+                ui.end_row();
+            });
     }
 
     /// The top bar doubles as the window's title bar: the window is
@@ -643,10 +667,22 @@ impl FadbApp {
             }
 
             egui::Frame::new()
-                .inner_margin(egui::Margin::symmetric(12, 5))
+                .inner_margin(egui::Margin::symmetric(TOP_BAR_MARGIN_X, 5))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
+                        // Spend exactly NAVIGATION_WIDTH before the selector:
+                        // the navigation panel's right edge sits that far from
+                        // the window's left, minus the margin already spent by
+                        // this frame, so the selector continues the boundary
+                        // the sidebar draws below. Read the cursor (which
+                        // already carries the trailing item spacing after the
+                        // brand) rather than min_rect, which does not.
+                        let content_left = ui.max_rect().left();
                         self.brand_with_slogan(ui);
+                        let spent = ui.cursor().left() - content_left;
+                        ui.add_space(
+                            (NAVIGATION_WIDTH - f32::from(TOP_BAR_MARGIN_X) - spent).max(0.0),
+                        );
 
                         let selected_text = self.selected_record().map_or_else(
                             || text(self.language, "select_device").to_owned(),
@@ -758,13 +794,12 @@ impl FadbApp {
         // Not selectable: selectable text would swallow the drag and turn
         // window-moves into text selections.
         ui.add(egui::Label::new(RichText::new("Fadb").size(20.0).strong()).selectable(false));
-        ui.add_space(28.0);
     }
 
     fn side_bar(&mut self, context: &egui::Context) {
         egui::SidePanel::left("navigation")
             .resizable(false)
-            .default_width(170.0)
+            .default_width(NAVIGATION_WIDTH)
             .show(context, |ui| {
                 egui::Frame::new()
                     .inner_margin(egui::Margin::symmetric(8, 10))
@@ -806,7 +841,7 @@ impl FadbApp {
                         .corner_radius(8.0)
                         .inner_margin(egui::Margin::same(10))
                         .show(ui, |ui| {
-                            ui.label(RichText::new(&error.message_key).strong());
+                            ui.label(RichText::new(error_title(self.language, error)).strong());
                             ui.label(&error.detail);
                         });
                     ui.add_space(10.0);
@@ -1182,6 +1217,18 @@ impl FadbApp {
                         .as_deref()
                         .unwrap_or(text(self.language, "adb_not_available")),
                 );
+                // Shown regardless of detection state: the natural next step
+                // after "not detected" is to go get it.
+                ui.horizontal(|ui| {
+                    button_aligned_label(ui, text(self.language, "adb_download"));
+                    if ui
+                        .button(text(self.language, "adb_download_link"))
+                        .clicked()
+                    {
+                        ui.ctx()
+                            .open_url(egui::OpenUrl::new_tab(adb_download_url(self.language)));
+                    }
+                });
                 ui.add_space(8.0);
                 ui.strong(text(self.language, "version"));
                 ui.label(
@@ -1356,6 +1403,24 @@ fn caption_button(
         egui::Button::new(RichText::new(label).size(13.0)),
     )
     .on_hover_text(tooltip)
+}
+
+/// Draw a plain label whose text sits on the same line as an adjacent
+/// [`egui::Button`]. egui pushes every widget in a horizontal row down to the
+/// row top (the "expand down" adjustment in `Layout::next_frame`), so the
+/// button's text ends up centered inside its taller frame, `button_padding.y`
+/// below a bare label's text. Giving the label the same height via an
+/// invisible frame centers the two on the same line.
+#[allow(clippy::cast_possible_truncation)] // theme paddings are small whole points
+fn button_aligned_label(ui: &mut egui::Ui, text: &str) {
+    egui::Frame::new()
+        .inner_margin(egui::Margin::symmetric(
+            0,
+            ui.spacing().button_padding.y as i8,
+        ))
+        .show(ui, |ui| {
+            ui.label(text);
+        });
 }
 
 /// A top-bar button that toggles a floating window: clicking again closes

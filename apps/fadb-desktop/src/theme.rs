@@ -160,11 +160,17 @@ fn build_visuals(dark_mode: bool) -> egui::Visuals {
     visuals
 }
 
-/// Install the CJK font fallback.
+/// Install the CJK font.
 ///
 /// Fonts live on the shared egui `Context` (all viewports/windows of the app
 /// share it), so calling this once at startup covers every window. Loads the
 /// system font, so never call it per frame.
+///
+/// The CJK font is the *primary* proportional font rather than a fallback:
+/// with it last, a label mixing Latin and CJK ("AI 助手") takes its
+/// ascent/descent from two different fonts, and the taller galley centers
+/// with its baseline a pixel off the pure-CJK labels beside it. One font for
+/// everything keeps every baseline on the same grid.
 pub fn set_fonts(context: &egui::Context) {
     let mut fonts = FontDefinitions::default();
     for candidate in font_candidates() {
@@ -173,7 +179,7 @@ pub fn set_fonts(context: &egui::Context) {
                 .font_data
                 .insert("fadb-cjk".to_owned(), FontData::from_owned(bytes).into());
             if let Some(family) = fonts.families.get_mut(&FontFamily::Proportional) {
-                family.push("fadb-cjk".to_owned());
+                family.insert(0, "fadb-cjk".to_owned());
             }
             // The terminal paints with the monospace family; without the
             // fallback its Chinese text renders as tofu boxes.

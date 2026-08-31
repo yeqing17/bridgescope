@@ -40,6 +40,7 @@ pub fn text(language: Language, key: &str) -> &'static str {
         (Language::Chinese, "layout") => "布局",
         (Language::Chinese, "screenshot") => "截图",
         (Language::Chinese, "logcat") => "日志",
+        (Language::Chinese, "webview") => "网页",
         (Language::Chinese, "select_device") => "选择设备",
         (Language::Chinese, "no_device") => "未连接设备",
         (Language::Chinese, "refresh") => "刷新",
@@ -52,6 +53,9 @@ pub fn text(language: Language, key: &str) -> &'static str {
         (Language::Chinese, "details") => "详情",
         (Language::Chinese, "hide") => "收起",
         (Language::Chinese, "adb_executable") => "ADB 可执行文件",
+        (Language::Chinese, "adb.fadb_adb_invalid") => "环境变量 FADB_ADB 指向的文件不存在",
+        (Language::Chinese, "adb_download") => "官方下载",
+        (Language::Chinese, "adb_download_link") => "Android 开发者网站",
         (Language::Chinese, "version") => "版本",
         (Language::Chinese, "detected_devices") => "已检测到的设备",
         (Language::Chinese, "unknown") => "未知",
@@ -471,6 +475,10 @@ pub fn text(language: Language, key: &str) -> &'static str {
         (_, "details") => "Details",
         (_, "hide") => "Hide",
         (_, "adb_executable") => "ADB executable",
+        (_, "adb.not_found") => "ADB was not found",
+        (_, "adb.fadb_adb_invalid") => "The FADB_ADB environment variable points to a missing file",
+        (_, "adb_download") => "Official download",
+        (_, "adb_download_link") => "developer.android.com",
         (_, "version") => "Version",
         (_, "detected_devices") => "Detected devices",
         (_, "unknown") => "Unknown",
@@ -797,14 +805,32 @@ stored locally only."
     }
 }
 
+/// Official download page for the Android platform-tools (which ship adb).
+/// Chinese uses Google's official China mirror domain, which stays reachable
+/// on networks where developer.android.com does not.
+#[must_use]
+pub fn adb_download_url(language: Language) -> &'static str {
+    match language {
+        Language::Chinese => "https://developer.android.google.cn/tools/releases/platform-tools",
+        Language::English => "https://developer.android.com/tools/releases/platform-tools",
+    }
+}
+
+/// Localized title for a domain error: the translated message key, or the
+/// raw key itself when no translation exists.
+#[must_use]
+pub fn error_title(language: Language, error: &BridgeError) -> String {
+    match text(language, &error.message_key) {
+        "" => error.message_key.clone(),
+        translated => translated.to_owned(),
+    }
+}
+
 /// Human-readable text for a domain error: localizes the message key when a
 /// translation exists and keeps the raw key (plus detail) otherwise.
 #[must_use]
 pub fn error_text(language: Language, error: &BridgeError) -> String {
-    let message = match text(language, &error.message_key) {
-        "" => error.message_key.clone(),
-        translated => translated.to_owned(),
-    };
+    let message = error_title(language, error);
     if error.detail.is_empty() {
         message
     } else {

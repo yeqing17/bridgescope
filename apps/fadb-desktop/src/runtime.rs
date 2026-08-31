@@ -1991,6 +1991,24 @@ async fn initialize_transport(
     }
 
     let explicit = std::env::var_os("FADB_ADB").map(PathBuf::from);
+    // An explicit FADB_ADB is a directive, not a hint: when it points at a
+    // missing file, surface that instead of silently falling back to the
+    // SDK/PATH search, which would mask the misconfiguration.
+    if let Some(path) = explicit.as_ref()
+        && !path.is_file()
+    {
+        let error = BridgeError::new(
+            ErrorCode::AdbNotFound,
+            "adb.fadb_adb_invalid",
+            path.display().to_string(),
+        );
+        warn!(
+            fadb_adb = %path.display(),
+            "FADB_ADB points to a missing executable; using fake backend"
+        );
+        send_event(events, context, BackendEvent::AdbUnavailable(error)).await;
+        return Arc::new(FakeAdbTransport::default());
+    }
     match AdbLocator::new(explicit).locate() {
         Ok(path) => {
             let transport: Arc<dyn AdbTransport> = Arc::new(ProcessAdbTransport::new(path.clone()));
