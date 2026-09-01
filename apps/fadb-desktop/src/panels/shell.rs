@@ -32,9 +32,18 @@ pub struct ShellPanelState {
     status: ShellStatus,
     error: Option<BridgeError>,
     focus_terminal: bool,
+    /// Lazily created system-clipboard handle for the paste actions; egui
+    /// only exposes clipboard reads through the Ctrl+V event.
+    clipboard: Option<arboard::Clipboard>,
+    /// Grid-cell selection over the visible viewport: `(anchor, head)`, each
+    /// a `(row, column)` pair in `TerminalCell` units.
+    selection: Option<(TerminalCell, TerminalCell)>,
     /// One-click commands (Xshell-style quick commands) for this panel.
     pub quick_commands: QuickCommandStore,
 }
+
+/// A `(row, column)` position in the terminal grid.
+type TerminalCell = (u16, u16);
 
 impl Default for ShellPanelState {
     fn default() -> Self {
@@ -46,6 +55,8 @@ impl Default for ShellPanelState {
             status: ShellStatus::Disconnected,
             error: None,
             focus_terminal: false,
+            clipboard: None,
+            selection: None,
             quick_commands: QuickCommandStore::default(),
         }
     }
@@ -96,8 +107,68 @@ impl ShellPanelState {
         self.target = selected_target;
         self.status = ShellStatus::Disconnected;
         self.error = None;
+        self.selection = None;
         self.clear_display();
         commands
+    }
+
+    /// The selection in reading order, or `None` when empty or collapsed.
+    fn ordered_selection(&self) -> Option<(TerminalCell, TerminalCell)> {
+        let (anchor, head) = self.selection?;
+        Some(if (anchor.0, anchor.1) <= (head.0, head.1) {
+            (anchor, head)
+        } else {
+            (head, anchor)
+        })
+    }
+
+    /// Extracts the selected text from the visible viewport. Wide (CJK)
+    /// cells contribute their glyph only once; rows are trimmed of trailing
+    /// blanks and joined with newlines.
+    fn selection_text(&self) -> Option<String> {
+        let (start, end) = self.ordered_selection()?;
+        let screen = self.parser.screen();
+        let mut lines = Vec::new();
+        for row in start.0..=end.0 {
+            let first = if row == start.0 { start.1 } else { 0 };
+            let last = if row == end.0 {
+                end.1
+            } else {
+                TERMINAL_COLUMNS.saturating_sub(1)
+            };
+            let mut line = String::new();
+            for column in first..=last {
+                if let Some(cell) = screen.cell(row, column) {
+                    line.push_str(cell.contents());
+                }
+            }
+            lines.push(line.trim_end().to_owned());
+        }
+        Some(lines.join("\n"))
+    }
+
+    /// Extracts a paste payload: bracketed-paste wrapped when the program
+    /// behind the terminal asked for it.
+    fn paste_payload(&self, clipboard: &str) -> Vec<u8> {
+        let screen = self.parser.screen();
+        let mut bytes = Vec::new();
+        if screen.bracketed_paste() {
+            bytes.extend_from_slice(b"\x1b[200~");
+        }
+        bytes.extend_from_slice(clipboard.as_bytes());
+        if screen.bracketed_paste() {
+            bytes.extend_from_slice(b"\x1b[201~");
+        }
+        bytes
+    }
+
+    /// Reads the system clipboard through a lazily created handle; failures
+    /// (headless environments, lost ownership) surface as `None`.
+    fn clipboard_text(&mut self) -> Option<String> {
+        if self.clipboard.is_none() {
+            self.clipboard = arboard::Clipboard::new().ok();
+        }
+        self.clipboard.as_mut()?.get_text().ok()
     }
 
     fn connect(&mut self) -> Option<BackendCommand> {
@@ -157,6 +228,7 @@ impl ShellPanelState {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn show(
     ui: &mut egui::Ui,
     context: &egui::Context,
@@ -207,6 +279,19 @@ pub fn show(
         }
         if ui.button(text(language, "shell_copy_visible")).clicked() {
             ui.ctx().copy_text(state.parser.screen().contents());
+        }
+        if ui
+            .add_enabled(
+                state.session_id.is_some(),
+                egui::Button::new(text(language, "shell_paste")),
+            )
+            .clicked()
+            && let Some(clipboard) = state.clipboard_text().filter(|text| !text.is_empty())
+        {
+            let payload = state.paste_payload(&clipboard);
+            if let Some(command) = state.write(payload) {
+                commands.push(command);
+            }
         }
         if ui.button(text(language, "shell_focus_terminal")).clicked() {
             state.focus_terminal = true;
@@ -263,15 +348,111 @@ pub fn show(
             }
         }
     }
+    // Text selection: drag to highlight, release to copy. A plain click
+    // collapses the selection again. The context menu mirrors the toolbar
+    // clipboard actions for mouse-only workflows.
+    handle_terminal_pointer(ui, language, state, &response, rect, &mut commands);
     paint_terminal(
         ui,
         language,
         rect,
         state.parser.screen(),
+        state.ordered_selection(),
         response.has_focus(),
         state.status == ShellStatus::Disconnected,
     );
     commands
+}
+
+/// Selection tracking over the terminal surface (drag-select with
+/// release-to-copy) plus the right-click clipboard menu.
+fn handle_terminal_pointer(
+    ui: &egui::Ui,
+    language: Language,
+    state: &mut ShellPanelState,
+    response: &egui::Response,
+    rect: egui::Rect,
+    commands: &mut Vec<BackendCommand>,
+) {
+    if response.drag_started()
+        && let Some(pos) = response.interact_pointer_pos()
+    {
+        let cell = cell_at_pointer(ui, rect, state.viewport_rows, pos);
+        state.selection = Some((cell, cell));
+    }
+    if response.dragged()
+        && let Some(pos) = response.interact_pointer_pos()
+        && let Some((_, head)) = state.selection.as_mut()
+    {
+        *head = cell_at_pointer(ui, rect, state.viewport_rows, pos);
+    }
+    if response.drag_stopped()
+        && state
+            .ordered_selection()
+            .is_some_and(|(start, end)| start != end)
+        && let Some(selected) = state.selection_text()
+        && selected.chars().any(|character| !character.is_whitespace())
+    {
+        ui.ctx().copy_text(selected);
+    }
+    if response.clicked() {
+        state.selection = None;
+    }
+    response.context_menu(|ui| {
+        let selected = state.selection_text();
+        if ui
+            .add_enabled(
+                selected
+                    .as_ref()
+                    .is_some_and(|text| !text.trim().is_empty()),
+                egui::Button::new(text(language, "shell_copy_selection")),
+            )
+            .clicked()
+        {
+            if let Some(selected) = selected {
+                ui.ctx().copy_text(selected);
+            }
+            ui.close();
+        }
+        if ui
+            .add_enabled(
+                state.session_id.is_some(),
+                egui::Button::new(text(language, "shell_paste")),
+            )
+            .clicked()
+        {
+            if let Some(clipboard) = state.clipboard_text().filter(|text| !text.is_empty()) {
+                let payload = state.paste_payload(&clipboard);
+                if let Some(command) = state.write(payload) {
+                    commands.push(command);
+                }
+            }
+            ui.close();
+        }
+        if ui.button(text(language, "shell_copy_visible")).clicked() {
+            ui.ctx().copy_text(state.parser.screen().contents());
+            ui.close();
+        }
+    });
+}
+
+/// Maps a pointer position to the terminal grid cell it falls in, clamped to
+/// the visible viewport. The conversion is safe: both coordinates are floored,
+/// clamped to the viewport bounds, and far below `u16::MAX`.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn cell_at_pointer(ui: &egui::Ui, rect: egui::Rect, rows: u16, pos: egui::Pos2) -> TerminalCell {
+    let font_id = egui::FontId::monospace(TERMINAL_FONT_SIZE);
+    let row_height = ui.fonts_mut(|fonts| fonts.row_height(&font_id)).max(1.0);
+    let cell_width = ui
+        .fonts_mut(|fonts| fonts.glyph_width(&font_id, 'W'))
+        .max(1.0);
+    let origin = rect.left_top() + egui::vec2(TERMINAL_PADDING, TERMINAL_PADDING);
+    let column = ((pos.x - origin.x) / cell_width).floor().max(0.0);
+    let row = ((pos.y - origin.y) / row_height).floor().max(0.0);
+    (
+        (row as u16).min(rows.saturating_sub(1)),
+        (column as u16).min(TERMINAL_COLUMNS - 1),
+    )
 }
 
 /// What a blank terminal area shows: the start-up guidance only before the
@@ -485,6 +666,7 @@ fn paint_terminal(
     language: Language,
     rect: egui::Rect,
     screen: &vt100::Screen,
+    selection: Option<(TerminalCell, TerminalCell)>,
     focused: bool,
     disconnected: bool,
 ) {
@@ -529,6 +711,27 @@ fn paint_terminal(
     let text = screen_text(language, screen, disconnected);
     let font_id = egui::FontId::monospace(TERMINAL_FONT_SIZE);
     let content_origin = rect.left_top() + egui::vec2(TERMINAL_PADDING, TERMINAL_PADDING);
+    if let Some((start, end)) = selection {
+        let row_height = ui.fonts_mut(|fonts| fonts.row_height(&font_id));
+        let cell_width = ui.fonts_mut(|fonts| fonts.glyph_width(&font_id, 'W'));
+        let highlight = if dark_mode {
+            Color32::from_rgba_premultiplied(60, 110, 180, 110)
+        } else {
+            Color32::from_rgba_premultiplied(120, 170, 240, 110)
+        };
+        for row in start.0..=end.0 {
+            let first = if row == start.0 { start.1 } else { 0 };
+            let last = if row == end.0 {
+                end.1
+            } else {
+                TERMINAL_COLUMNS - 1
+            };
+            let position = content_origin
+                + egui::vec2(f32::from(first) * cell_width, f32::from(row) * row_height);
+            let size = egui::vec2(f32::from(last - first + 1) * cell_width, row_height);
+            painter.rect_filled(egui::Rect::from_min_size(position, size), 2.0, highlight);
+        }
+    }
     let galley = painter.layout_no_wrap(text, font_id.clone(), foreground);
     if !galley.is_empty() {
         painter.galley(content_origin, galley.clone(), foreground);
@@ -574,6 +777,42 @@ fn status_style(language: Language, status: ShellStatus) -> (&'static str, Color
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn state_with_output(bytes: &[u8]) -> ShellPanelState {
+        let mut state = ShellPanelState::default();
+        state.parser.process(bytes);
+        state
+    }
+
+    #[test]
+    fn selection_text_extracts_grid_range() {
+        let mut state = state_with_output(b"hello world\r\nsecond line");
+        state.selection = Some(((0, 0), (0, 4)));
+        assert_eq!(state.selection_text(), Some("hello".to_owned()));
+        state.selection = Some(((0, 6), (1, 5)));
+        assert_eq!(state.selection_text(), Some("world\nsecond".to_owned()));
+        state.selection = Some(((1, 0), (1, 79)));
+        assert_eq!(state.selection_text(), Some("second line".to_owned()));
+    }
+
+    #[test]
+    fn ordered_selection_normalizes_drag_direction() {
+        let mut state = ShellPanelState {
+            selection: Some(((3, 10), (1, 2))),
+            ..ShellPanelState::default()
+        };
+        assert_eq!(state.ordered_selection(), Some(((1, 2), (3, 10))));
+        state.selection = None;
+        assert_eq!(state.ordered_selection(), None);
+    }
+
+    #[test]
+    fn paste_payload_respects_bracketed_paste_mode() {
+        let state = state_with_output(b"");
+        assert_eq!(state.paste_payload("ls"), b"ls".to_vec());
+        let state = state_with_output(b"\x1b[?2004h");
+        assert_eq!(state.paste_payload("ls"), b"\x1b[200~ls\x1b[201~".to_vec());
+    }
 
     #[test]
     fn control_keys_are_encoded() {

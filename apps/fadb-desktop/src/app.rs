@@ -29,7 +29,11 @@ const SLOGAN_HOVER_SECONDS: f32 = 1.5;
 /// Width of the left navigation panel. The top bar aligns the device
 /// selector's left edge to this boundary, so the two must share the
 /// constant.
-const NAVIGATION_WIDTH: f32 = 150.0;
+const NAVIGATION_WIDTH: f32 = 125.0;
+/// Width of the navigation panel when collapsed to the icon-only rail.
+const COLLAPSED_NAVIGATION_WIDTH: f32 = 40.0;
+/// Storage key remembering whether the navigation rail is collapsed.
+const NAVIGATION_COLLAPSED_STORAGE_KEY: &str = "fadb.navigation_collapsed";
 /// Horizontal inner margin of the top-bar frame.
 const TOP_BAR_MARGIN_X: i8 = 12;
 
@@ -78,6 +82,23 @@ impl Panel {
             Self::Mirror => "mirror",
         }
     }
+
+    /// Emoji shown for the panel on the collapsed navigation rail.
+    const fn icon(self) -> &'static str {
+        match self {
+            Self::Overview => "📊",
+            Self::Files => "📁",
+            Self::Applications => "📦",
+            Self::Processes => "📋",
+            Self::Performance => "⚡",
+            Self::Shell => "💻",
+            Self::Layout => "🔍",
+            Self::Screenshot => "📷",
+            Self::Logcat => "📜",
+            Self::WebView => "🌐",
+            Self::Mirror => "📺",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -107,11 +128,11 @@ pub struct FadbApp {
     /// Whether a window-resize BeginResize command was already sent for the
     /// current pointer press (see `handle_window_resize`).
     resize_sent: bool,
-    /// How long the pointer has hovered the top-bar logo, for the slogan
-    /// easter egg.
     /// When the pointer started hovering the top-bar logo, for the slogan
     /// easter egg (`None` while not hovering).
     logo_hover_started: Option<std::time::Instant>,
+    /// Whether the left navigation rail is collapsed to icons only.
+    navigation_collapsed: bool,
     ai_form: assistant::AiSettingsForm,
     files: files::FilesPanelState,
     applications: applications::ApplicationsPanelState,
@@ -166,6 +187,10 @@ impl FadbApp {
             assistant_open: false,
             resize_sent: false,
             logo_hover_started: None,
+            navigation_collapsed: creation_context
+                .storage
+                .and_then(|storage| storage.get_string(NAVIGATION_COLLAPSED_STORAGE_KEY))
+                .is_some_and(|stored| stored == "1"),
             ai_form: assistant::AiSettingsForm::from_settings(stored_ai.as_ref()),
             files: files::FilesPanelState::default(),
             applications: applications::ApplicationsPanelState::default(),
@@ -797,16 +822,57 @@ impl FadbApp {
     }
 
     fn side_bar(&mut self, context: &egui::Context) {
-        egui::SidePanel::left("navigation")
-            .resizable(false)
-            .default_width(NAVIGATION_WIDTH)
-            .show(context, |ui| {
-                egui::Frame::new()
-                    .inner_margin(egui::Margin::symmetric(8, 10))
-                    .show(ui, |ui| {
-                        for panel in Panel::ALL {
-                            let label = RichText::new(text(self.language, panel.key())).size(13.5);
-                            let selected = self.active_panel == panel;
+        let collapsed = self.navigation_collapsed;
+        let mut panel = egui::SidePanel::left("navigation");
+        if collapsed {
+            panel = panel.exact_width(COLLAPSED_NAVIGATION_WIDTH);
+        } else {
+            // Fixed design width: neither draggable nor remembered, the rail
+            // is either this size or the collapsed icon strip.
+            panel = panel.exact_width(NAVIGATION_WIDTH);
+        }
+        // The built-in separator draws a hover-bright line and a resize
+        // cursor; the rail is not resizable, so the line only misleads.
+        panel = panel.show_separator_line(false);
+        panel.show(context, |ui| {
+            let margin = if collapsed { 4 } else { 8 };
+            egui::Frame::new()
+                .inner_margin(egui::Margin::symmetric(margin, 10))
+                .show(ui, |ui| {
+                    let toggle = if collapsed { "»" } else { "«" };
+                    let toggle_tip = if collapsed {
+                        text(self.language, "navigation_expand")
+                    } else {
+                        text(self.language, "navigation_collapse")
+                    };
+                    if ui
+                        .add_sized(
+                            [ui.available_width(), 24.0],
+                            egui::Button::new(RichText::new(toggle).size(12.0)),
+                        )
+                        .on_hover_text(toggle_tip)
+                        .clicked()
+                    {
+                        self.navigation_collapsed = !collapsed;
+                    }
+                    ui.add_space(4.0);
+                    for panel_kind in Panel::ALL {
+                        let selected = self.active_panel == panel_kind;
+                        if collapsed {
+                            // Icon-only rail: the tooltip carries the name.
+                            let response = ui
+                                .add_sized(
+                                    [ui.available_width(), 32.0],
+                                    egui::Button::new(RichText::new(panel_kind.icon()).size(15.0))
+                                        .selected(selected),
+                                )
+                                .on_hover_text(text(self.language, panel_kind.key()));
+                            if response.clicked() {
+                                self.active_panel = panel_kind;
+                            }
+                        } else {
+                            let label =
+                                RichText::new(text(self.language, panel_kind.key())).size(13.5);
                             if ui
                                 .add_sized(
                                     [ui.available_width(), 28.0],
@@ -814,11 +880,12 @@ impl FadbApp {
                                 )
                                 .clicked()
                             {
-                                self.active_panel = panel;
+                                self.active_panel = panel_kind;
                             }
                         }
-                    });
-            });
+                    }
+                });
+        });
     }
 
     fn central_panel(&mut self, context: &egui::Context) {
@@ -1286,6 +1353,14 @@ impl eframe::App for FadbApp {
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        storage.set_string(
+            NAVIGATION_COLLAPSED_STORAGE_KEY,
+            if self.navigation_collapsed {
+                "1".to_owned()
+            } else {
+                "0".to_owned()
+            },
+        );
         if let Ok(serialized) = serde_json::to_string(&self.recent_endpoints) {
             storage.set_string(RECENT_ENDPOINTS_STORAGE_KEY, serialized);
         }

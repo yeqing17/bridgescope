@@ -468,41 +468,46 @@ pub fn show(
     }
     let mut entries = state.entries.clone();
     sort_entries(&mut entries, state.sort_key, state.sort_reverse);
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        egui::Grid::new("files-grid").striped(true).show(ui, |ui| {
-            sort_header(ui, language, state, SortKey::Name, "files_name");
-            ui.strong(text(language, "files_type"));
-            sort_header(ui, language, state, SortKey::Size, "files_size");
-            sort_header(ui, language, state, SortKey::Modified, "files_modified");
-            ui.end_row();
-            for (index, entry) in entries.iter().enumerate() {
-                let selected = state.selected == Some(index);
-                let response = ui.selectable_label(selected, &entry.name);
-                if response.clicked() {
-                    state.selected = Some(index);
-                }
-                if response.double_clicked() && entry.kind == RemoteFileKind::Directory {
-                    commands.push(state.navigate(target.clone(), entry.path.clone()));
-                }
-                response.context_menu(|ui| {
-                    state.selected = Some(index);
-                    entry_context_menu(ui, language, state, &mut commands, &target, entry);
-                });
-                ui.label(kind_label(language, entry.kind));
-                ui.label(
-                    entry
-                        .size_bytes
-                        .map_or("—".to_owned(), |size| size.to_string()),
-                );
-                ui.label(
-                    entry
-                        .modified_unix_seconds
-                        .map_or_else(|| "—".to_owned(), format_modified_time),
-                );
+    // auto_shrink must be off: the default hugs the grid's content width,
+    // which then truncates the last column (modification time) mid-glyph and
+    // parks the scrollbar in the middle of the panel.
+    egui::ScrollArea::vertical()
+        .auto_shrink(false)
+        .show(ui, |ui| {
+            egui::Grid::new("files-grid").striped(true).show(ui, |ui| {
+                sort_header(ui, language, state, SortKey::Name, "files_name");
+                ui.strong(text(language, "files_type"));
+                sort_header(ui, language, state, SortKey::Size, "files_size");
+                sort_header(ui, language, state, SortKey::Modified, "files_modified");
                 ui.end_row();
-            }
+                for (index, entry) in entries.iter().enumerate() {
+                    let selected = state.selected == Some(index);
+                    let response = ui.selectable_label(selected, &entry.name);
+                    if response.clicked() {
+                        state.selected = Some(index);
+                    }
+                    if response.double_clicked() && entry.kind == RemoteFileKind::Directory {
+                        commands.push(state.navigate(target.clone(), entry.path.clone()));
+                    }
+                    response.context_menu(|ui| {
+                        state.selected = Some(index);
+                        entry_context_menu(ui, language, state, &mut commands, &target, entry);
+                    });
+                    ui.label(kind_label(language, entry.kind));
+                    ui.label(
+                        entry
+                            .size_bytes
+                            .map_or("—".to_owned(), |size| size.to_string()),
+                    );
+                    ui.label(
+                        entry
+                            .modified_unix_seconds
+                            .map_or_else(|| "—".to_owned(), format_modified_time),
+                    );
+                    ui.end_row();
+                }
+            });
         });
-    });
     ui.horizontal(|ui| {
         let selected = state.selected_entry().cloned();
         let can_mutate = state.mutation.is_none();

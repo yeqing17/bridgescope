@@ -10,6 +10,8 @@ pub enum Language {
 pub fn text(language: Language, key: &str) -> &'static str {
     match (language, key) {
         (Language::Chinese, "overview") => "概览",
+        (Language::Chinese, "navigation_collapse") => "收起导航",
+        (Language::Chinese, "navigation_expand") => "展开导航",
         (Language::Chinese, "overview_na") => "暂无",
         (Language::Chinese, "overview_not_loaded") => "概览数据尚未加载，点击顶部「刷新」获取。",
         (Language::Chinese, "overview_unauthorized") => "请在设备上允许 USB 调试授权，然后刷新。",
@@ -223,6 +225,8 @@ pub fn text(language: Language, key: &str) -> &'static str {
         (Language::Chinese, "shell_disconnect") => "断开",
         (Language::Chinese, "shell_clear_display") => "清屏",
         (Language::Chinese, "shell_copy_visible") => "复制可见内容",
+        (Language::Chinese, "shell_copy_selection") => "复制所选",
+        (Language::Chinese, "shell_paste") => "粘贴",
         (Language::Chinese, "shell_focus_terminal") => "聚焦终端",
         (Language::Chinese, "shell_select_online") => "请先选择在线设备再连接。",
         (Language::Chinese, "shell_empty_hint") => "点击「连接」并聚焦此终端后即可输入命令。",
@@ -428,6 +432,8 @@ pub fn text(language: Language, key: &str) -> &'static str {
         }
         (Language::Chinese, "device.target_stale") => "设备已不在线，请刷新后重试",
         (_, "overview") => "Overview",
+        (_, "navigation_collapse") => "Collapse navigation",
+        (_, "navigation_expand") => "Expand navigation",
         (_, "overview_na") => "N/A",
         (_, "overview_not_loaded") => {
             "Overview data is not loaded yet. Press Refresh in the top bar."
@@ -612,6 +618,8 @@ only for the current user."
         (_, "shell_disconnect") => "Disconnect",
         (_, "shell_clear_display") => "Clear display",
         (_, "shell_copy_visible") => "Copy visible",
+        (_, "shell_copy_selection") => "Copy selection",
+        (_, "shell_paste") => "Paste",
         (_, "shell_focus_terminal") => "Focus terminal",
         (_, "shell_select_online") => "Select an online device before connecting.",
         (_, "shell_empty_hint") => "Click Connect, then focus this terminal to type.",
@@ -998,6 +1006,8 @@ mod tests {
         "shell_disconnect",
         "shell_clear_display",
         "shell_copy_visible",
+        "shell_copy_selection",
+        "shell_paste",
         "shell_focus_terminal",
         "shell_select_online",
         "shell_empty_hint",
@@ -1156,7 +1166,18 @@ mod tests {
                 .chain(WIRELESS_KEYS)
                 .chain(MIRROR_KEYS)
                 .chain(OVERVIEW_KEYS)
-                .chain(["refresh", "confirm", "cancel", "connect", "copy"].iter())
+                .chain(
+                    [
+                        "refresh",
+                        "confirm",
+                        "cancel",
+                        "connect",
+                        "copy",
+                        "navigation_collapse",
+                        "navigation_expand",
+                    ]
+                    .iter(),
+                )
             {
                 assert!(
                     !text(language, key).is_empty(),

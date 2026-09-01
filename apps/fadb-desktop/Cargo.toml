@@ -7,6 +7,7 @@ rust-version.workspace = true
 repository.workspace = true
 
 [dependencies]
+arboard.workspace = true
 fadb-adb = { path = "../../crates/fadb-adb" }
 fadb-ai = { path = "../../crates/fadb-ai" }
 fadb-device = { path = "../../crates/fadb-device" }

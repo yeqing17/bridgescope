@@ -11,13 +11,14 @@ members = [
 ]
 
 [workspace.package]
-version = "0.8.4"
+version = "0.8.5"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.90"
 repository = "https://github.com/yeqing17/fadb"
 
 [workspace.dependencies]
+arboard = { version = "3.6.1", default-features = false }
 async-trait = "0.1.91"
 eframe = { version = "0.33.3", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
 flate2 = "1.1.9"
