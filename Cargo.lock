@@ -949,7 +949,7 @@ dependencies = [
 
 [[package]]
 name = "fadb-adb"
-version = "0.8.6"
+version = "0.8.7"
 dependencies = [
  "async-trait",
  "fadb-domain",
@@ -963,7 +963,7 @@ dependencies = [
 
 [[package]]
 name = "fadb-ai"
-version = "0.8.6"
+version = "0.8.7"
 dependencies = [
  "async-trait",
  "fadb-domain",
@@ -977,14 +977,14 @@ dependencies = [
 
 [[package]]
 name = "fadb-application"
-version = "0.8.6"
+version = "0.8.7"
 dependencies = [
  "fadb-domain",
 ]
 
 [[package]]
 name = "fadb-desktop"
-version = "0.8.6"
+version = "0.8.7"
 dependencies = [
  "arboard",
  "eframe",
@@ -1014,7 +1014,7 @@ dependencies = [
 
 [[package]]
 name = "fadb-device"
-version = "0.8.6"
+version = "0.8.7"
 dependencies = [
  "fadb-adb",
  "fadb-domain",
@@ -1022,7 +1022,7 @@ dependencies = [
 
 [[package]]
 name = "fadb-domain"
-version = "0.8.6"
+version = "0.8.7"
 dependencies = [
  "serde",
  "serde_json",
@@ -1032,7 +1032,7 @@ dependencies = [
 
 [[package]]
 name = "fadb-scrcpy"
-version = "0.8.6"
+version = "0.8.7"
 dependencies = [
  "fadb-domain",
  "mp4",
@@ -1044,7 +1044,7 @@ dependencies = [
 
 [[package]]
 name = "fadb-test-support"
-version = "0.8.6"
+version = "0.8.7"
 dependencies = [
  "async-trait",
  "fadb-adb",
