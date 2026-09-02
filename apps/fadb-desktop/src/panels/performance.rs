@@ -1,17 +1,19 @@
 use std::collections::VecDeque;
 
-use eframe::egui::{self, Color32, Pos2, Stroke, Vec2};
+use eframe::egui::{self, Color32, Pos2, RichText, Stroke, Vec2};
 use fadb_domain::{BackendCommand, BackendEvent, DeviceTarget, PerformanceSnapshot};
 
 use crate::i18n::{Language, text};
 
 const MAX_SAMPLES: usize = 60;
+/// One sample per second, so the 60-sample window covers the last minute and
+/// the chart's time labels can be hard-coded.
+const SAMPLE_WINDOW_LABELS: [(&str, f32); 3] = [("-60s", 0.0), ("-30s", 0.5), ("0s", 1.0)];
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 struct Sample {
     cpu: Option<f32>,
-    memory: Option<f32>,
-    battery: Option<f32>,
+    memory_used_mib: Option<f32>,
 }
 
 #[derive(Default)]
@@ -43,15 +45,13 @@ impl PerformancePanelState {
                 self.loading = false;
                 self.latest = Some(snapshot.clone());
                 let metrics = &snapshot.metrics;
-                let total = metrics.memory_total_kib.unwrap_or_default();
-                let available = metrics.memory_available_kib.unwrap_or_default();
-                let memory = (total > 0).then(|| {
-                    ((total.saturating_sub(available) as f64 / total as f64) * 100.0) as f32
-                });
+                let memory_used_mib = metrics
+                    .memory_total_kib
+                    .zip(metrics.memory_available_kib)
+                    .map(|(total, available)| (total.saturating_sub(available)) as f32 / 1024.0);
                 self.samples.push_back(Sample {
                     cpu: metrics.cpu_usage_percent,
-                    memory,
-                    battery: metrics.battery_percent.map(f32::from),
+                    memory_used_mib,
                 });
                 while self.samples.len() > MAX_SAMPLES {
                     self.samples.pop_front();
@@ -67,6 +67,7 @@ impl PerformancePanelState {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn show(
     ui: &mut egui::Ui,
     language: Language,
@@ -125,8 +126,54 @@ pub fn show(
             );
         });
     ui.add_space(14.0);
-    ui.strong(text(language, "performance_history"));
-    draw_chart(ui, language, &state.samples);
+
+    let samples: Vec<Sample> = state.samples.iter().copied().collect();
+    let cpu_values: Vec<Option<f32>> = samples.iter().map(|sample| sample.cpu).collect();
+    let memory_values: Vec<Option<f32>> = samples
+        .iter()
+        .map(|sample| sample.memory_used_mib)
+        .collect();
+
+    let cpu_color = Color32::from_rgb(248, 113, 113);
+    let memory_color = Color32::from_rgb(96, 165, 250);
+
+    chart_title(
+        ui,
+        text(language, "cpu"),
+        format_percent(metrics.cpu_usage_percent),
+        cpu_color,
+    );
+    area_chart(ui, cpu_color, &cpu_values, 100.0, "100%", "50%", 140.0);
+
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
+    let memory_total_mib = latest
+        .metrics
+        .memory_total_kib
+        .map_or(100.0, |kib| kib as f32 / 1024.0);
+    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+    let memory_used_mib = latest
+        .metrics
+        .memory_total_kib
+        .zip(latest.metrics.memory_available_kib)
+        .map(|(total, available)| (total.saturating_sub(available)) as f32 / 1024.0);
+    let memory_label = memory_used_mib.map_or_else(
+        || "-".to_owned(),
+        |used| format!("{:.0}% · {:.0} MB", used / memory_total_mib * 100.0, used),
+    );
+    chart_title(ui, text(language, "memory"), memory_label, memory_color);
+    area_chart(
+        ui,
+        memory_color,
+        &memory_values,
+        memory_total_mib.max(1.0),
+        &format!("{memory_total_mib:.0} MB"),
+        &format!("{:.0} MB", memory_total_mib / 2.0),
+        140.0,
+    );
     commands
 }
 
@@ -135,9 +182,30 @@ fn metric(ui: &mut egui::Ui, label: &str, value: String) {
     ui.label(value);
 }
 
+/// The chart header: metric name on the left, current value (in the series
+/// color) on the right, mirroring the summary grid above.
+fn chart_title(ui: &mut egui::Ui, name: &str, value: String, color: Color32) {
+    ui.horizontal(|ui| {
+        ui.strong(RichText::new(name).size(14.0));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(RichText::new(value).strong().color(color));
+        });
+    });
+}
+
+/// An AYA-style area chart: filled series over a 0..`y_max` scale, labeled
+/// gridlines, and time labels along the top edge (one sample per second).
 #[allow(clippy::cast_precision_loss)]
-fn draw_chart(ui: &mut egui::Ui, language: Language, samples: &VecDeque<Sample>) {
-    let desired = Vec2::new(ui.available_width().max(360.0), 220.0);
+fn area_chart(
+    ui: &mut egui::Ui,
+    color: Color32,
+    values: &[Option<f32>],
+    y_max: f32,
+    y_top_label: &str,
+    y_mid_label: &str,
+    height: f32,
+) {
+    let desired = Vec2::new(ui.available_width().max(360.0), height);
     let (response, painter) = ui.allocate_painter(desired, egui::Sense::hover());
     let rect = response.rect;
     painter.rect_stroke(
@@ -146,63 +214,88 @@ fn draw_chart(ui: &mut egui::Ui, language: Language, samples: &VecDeque<Sample>)
         Stroke::new(1.0, Color32::from_gray(75)),
         egui::StrokeKind::Inside,
     );
-    for step in 0..=4 {
-        let y = rect.top() + rect.height() * step as f32 / 4.0;
+    for (fraction, label) in [
+        (0.0, Some(y_top_label)),
+        (0.5, Some(y_mid_label)),
+        (1.0, None),
+    ] {
+        let y = rect.top() + rect.height() * fraction;
         painter.line_segment(
             [Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
             Stroke::new(1.0, Color32::from_gray(45)),
         );
+        if let Some(label) = label {
+            painter.text(
+                Pos2::new(rect.left() + 6.0, y + 2.0),
+                egui::Align2::LEFT_TOP,
+                label,
+                egui::FontId::monospace(11.0),
+                Color32::from_gray(150),
+            );
+        }
+    }
+    for (label, fraction) in SAMPLE_WINDOW_LABELS {
+        let y = rect.top() + 16.0;
+        let x = rect.left() + 6.0 + (rect.width() - 12.0) * fraction;
         painter.text(
-            Pos2::new(rect.left() + 6.0, y + 2.0),
+            Pos2::new(x, y),
             egui::Align2::LEFT_TOP,
-            format!("{}%", 100 - step * 25),
+            label,
             egui::FontId::monospace(11.0),
             Color32::from_gray(150),
         );
     }
-    let series = [
-        (text(language, "cpu"), Color32::from_rgb(248, 113, 113), 0),
-        (text(language, "memory"), Color32::from_rgb(96, 165, 250), 1),
-        (
-            text(language, "battery"),
-            Color32::from_rgb(74, 222, 128),
-            3,
-        ),
-    ];
-    for (label, color, index) in series {
-        let points = samples
-            .iter()
-            .enumerate()
-            .filter_map(|(position, sample)| {
-                let value = match index {
-                    0 => sample.cpu,
-                    1 => sample.memory,
-                    _ => sample.battery,
-                }?;
-                let x = if samples.len() <= 1 {
-                    rect.left()
-                } else {
-                    rect.left() + rect.width() * position as f32 / (samples.len() - 1) as f32
-                };
-                Some(Pos2::new(
-                    x,
-                    rect.bottom() - rect.height() * (value / 100.0).clamp(0.0, 1.0),
-                ))
-            })
-            .collect::<Vec<_>>();
-        for pair in points.windows(2) {
-            painter.line_segment([pair[0], pair[1]], Stroke::new(2.0, color));
+
+    // Contiguous runs of present values, each rendered as a filled polygon
+    // (triangle mesh down to the chart floor) plus an anti-aliased outline.
+    let mut run: Vec<Pos2> = Vec::new();
+    let mut runs: Vec<Vec<Pos2>> = Vec::new();
+    for (index, value) in values.iter().copied().enumerate() {
+        let Some(value) = value else {
+            if !run.is_empty() {
+                runs.push(std::mem::take(&mut run));
+            }
+            continue;
+        };
+        let x = if values.len() <= 1 {
+            rect.left()
+        } else {
+            rect.left() + rect.width() * index as f32 / (values.len() - 1) as f32
+        };
+        let y = rect.bottom() - rect.height() * (value / y_max).clamp(0.0, 1.0);
+        run.push(egui::pos2(x, y));
+    }
+    if !run.is_empty() {
+        runs.push(run);
+    }
+
+    // Straight-alpha translucent fill over a dark background; premultiplied
+    // colors render washed-out near-white here.
+    let fill = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 45);
+    for run in &runs {
+        if run.len() < 2 {
+            continue;
         }
-        painter.text(
-            Pos2::new(
-                rect.right() - 8.0 - label.len() as f32 * 7.0,
-                rect.top() + 8.0 + index as f32 * 16.0,
-            ),
-            egui::Align2::LEFT_TOP,
-            label,
-            egui::FontId::proportional(12.0),
-            color,
-        );
+        let mut mesh = egui::Mesh::default();
+        // Vertices: the series points first, then one floor point under each,
+        // so segment `i` spans vertices i, i+1, run_len+i, run_len+i+1.
+        for point in run {
+            mesh.colored_vertex(*point, fill);
+        }
+        for point in run {
+            mesh.colored_vertex(egui::pos2(point.x, rect.bottom()), fill);
+        }
+        let line_count = u32::try_from(run.len()).expect("a chart run never exceeds u32 vertices");
+        for index in 0..line_count - 1 {
+            let left = index;
+            let right = index + 1;
+            let left_floor = line_count + index;
+            let right_floor = line_count + right;
+            mesh.add_triangle(left, right, right_floor);
+            mesh.add_triangle(left, right_floor, left_floor);
+        }
+        painter.add(egui::Shape::mesh(mesh));
+        painter.add(egui::Shape::line(run.clone(), Stroke::new(2.0, color)));
     }
 }
 

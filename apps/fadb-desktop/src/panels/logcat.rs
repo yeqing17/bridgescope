@@ -70,6 +70,18 @@ impl LogLine {
     }
 }
 
+/// `filter` is the dropdown index: 0 = all, otherwise the minimum severity.
+/// The dropdown carries an extra "all" entry ahead of `LEVELS`, hence the
+/// shift against `severity_index`. Unrecognized ('?') rows only survive the
+/// unfiltered view.
+fn level_passes(filter: usize, severity_index: Option<usize>) -> bool {
+    match (filter, severity_index) {
+        (0, _) => true,
+        (_, None) => false,
+        (_, Some(index)) => index + 1 >= filter,
+    }
+}
+
 /// Splits the first `count` whitespace-separated fields off `raw`,
 /// collapsing runs of spaces; returns the fields and the untrimmed remainder.
 fn split_prefix_fields(raw: &str, count: usize) -> Option<(Vec<&str>, &str)> {
@@ -114,6 +126,9 @@ pub struct LogcatPanelState {
     user_stopped: bool,
     paused: bool,
     auto_scroll: bool,
+    /// Last time stick-to-bottom fired; auto-scroll is throttled to a few
+    /// updates per second so high-volume streams stay readable.
+    last_stick: Option<Instant>,
     /// Minimum severity to display (index into `LEVELS`).
     level_filter: usize,
     query: String,
@@ -236,10 +251,7 @@ pub fn show(
         if !state.running
             && !state.starting
             && ui
-                .add_enabled(
-                    online && !state.user_stopped,
-                    egui::Button::new(text(language, "logcat_start")),
-                )
+                .add_enabled(online, egui::Button::new(text(language, "logcat_start")))
                 .clicked()
             && let Some(target) = state.target.clone()
         {
@@ -328,8 +340,7 @@ pub fn show(
     let query = state.query.trim().to_lowercase();
     state.visible.clear();
     for (index, line) in state.lines.iter().enumerate() {
-        let level_index = line.severity_index().unwrap_or(0);
-        if state.level_filter > 0 && level_index < state.level_filter {
+        if !level_passes(state.level_filter, line.severity_index()) {
             continue;
         }
         if !query.is_empty()
@@ -353,9 +364,19 @@ pub fn show(
     );
 
     let visible = std::mem::take(&mut state.visible);
+    // Stick to the bottom a few times per second at most: on every frame the
+    // view would jump dozens of rows per second, which is unreadable.
+    let stick_now = state.auto_scroll
+        && !state.paused
+        && state
+            .last_stick
+            .is_none_or(|last| last.elapsed() >= Duration::from_millis(250));
+    if stick_now {
+        state.last_stick = Some(Instant::now());
+    }
     egui::ScrollArea::vertical()
         .auto_shrink(false)
-        .stick_to_bottom(state.auto_scroll && !state.paused)
+        .stick_to_bottom(stick_now)
         .show_rows(ui, ROW_HEIGHT, visible.len(), |ui, range| {
             for row in range {
                 let line = &state.lines[visible[row]];
@@ -482,6 +503,23 @@ mod tests {
         state.paused = true;
         state.ingest(b"08-29 10:00:01.300 1 1 E Tag: dropped\n");
         assert_eq!(state.lines.len(), 2);
+    }
+
+    #[test]
+    fn level_filter_minimum_severity_is_inclusive() {
+        // Selecting W (dropdown index 4) keeps W, E and F, drops V/D/I.
+        assert!(level_passes(4, Some(3)));
+        assert!(level_passes(4, Some(4)));
+        assert!(level_passes(4, Some(5)));
+        assert!(!level_passes(4, Some(2)));
+        // Selecting E keeps E and F.
+        assert!(level_passes(5, Some(4)));
+        assert!(!level_passes(5, Some(3)));
+        // "All" keeps everything, including unparsed rows.
+        assert!(level_passes(0, Some(0)));
+        assert!(level_passes(0, None));
+        // Unparsed rows only survive the unfiltered view.
+        assert!(!level_passes(1, None));
     }
 
     #[test]
