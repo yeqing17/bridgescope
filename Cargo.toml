@@ -38,6 +38,7 @@ vt100 = "0.16.2"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
 uuid = { version = "1.24.0", features = ["v4", "serde"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
+egui_plot = "0.34.1"
 
 [workspace.lints.rust]
 # "deny" rather than "forbid": apps/fadb-desktop/src/platform.rs is the

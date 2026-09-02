@@ -13,27 +13,27 @@ pub fn show(
     selected: Option<&DeviceRecord>,
     overview: Option<&DeviceOverview>,
     loading: bool,
-) {
+) -> Option<String> {
     ui.heading(text(language, "overview"));
     ui.add_space(12.0);
 
     let Some(device) = selected else {
         empty_state(ui, language);
-        return;
+        return None;
     };
 
     match device.descriptor.state {
         DeviceState::Unauthorized => {
             warning(ui, text(language, "overview_unauthorized"));
-            return;
+            return None;
         }
         DeviceState::Offline => {
             warning(ui, text(language, "overview_offline"));
-            return;
+            return None;
         }
         DeviceState::Unknown => {
             warning(ui, text(language, "overview_unknown_state"));
-            return;
+            return None;
         }
         DeviceState::Online => {}
     }
@@ -52,9 +52,11 @@ pub fn show(
             Some(overview) => device_card(ui, language, device, overview),
             None if !loading => {
                 ui.label(text(language, "overview_not_loaded"));
+                None
             }
-            None => {}
-        });
+            None => None,
+        })
+        .inner
 }
 
 /// The raised surface holding the device hero line and the field grid.
@@ -63,7 +65,7 @@ fn device_card(
     language: Language,
     device: &DeviceRecord,
     overview: &DeviceOverview,
-) {
+) -> Option<String> {
     let palette = theme::palette(ui.visuals().dark_mode);
     egui::Frame::new()
         .fill(palette.ai_bubble)
@@ -76,8 +78,9 @@ fn device_card(
             ui.separator();
             ui.add_space(16.0);
             let fields = overview_fields(language, device, overview);
-            field_grid(ui, language, &fields);
-        });
+            field_grid(ui, language, &fields)
+        })
+        .inner
 }
 
 /// Device name with brand / Android chips, echoing the card's monochrome tile.
@@ -324,33 +327,40 @@ fn processor_summary(
 /// Three columns that stay aligned across rows and together span the full
 /// card width: `egui::Grid` keeps shared column origins while
 /// `min_col_width` spreads the columns out.
-fn field_grid(ui: &mut egui::Ui, language: Language, fields: &[Field]) {
+fn field_grid(ui: &mut egui::Ui, language: Language, fields: &[Field]) -> Option<String> {
     const COLUMNS: u8 = 3;
     const GAP_X: f32 = 32.0;
     let columns = f32::from(COLUMNS);
     let min_col_width = ((ui.available_width() - GAP_X * (columns - 1.0)) / columns).max(140.0);
+    let mut copied = None;
     egui::Grid::new("overview-fields")
         .num_columns(usize::from(COLUMNS))
         .spacing([GAP_X, 18.0])
         .min_col_width(min_col_width)
         .show(ui, |ui| {
             for (index, entry) in fields.iter().enumerate() {
-                field_cell(ui, language, entry);
+                if let Some(value) = field_cell(ui, language, entry) {
+                    copied = Some(value);
+                }
                 if (index + 1) % usize::from(COLUMNS) == 0 {
                     ui.end_row();
                 }
             }
         });
+    copied
 }
 
 /// Small icon + weak label on top, the value (or 暂无) below.
-fn field_cell(ui: &mut egui::Ui, language: Language, entry: &Field) {
+///
+/// A cell carrying a value is click-to-copy: clicking anywhere in it copies
+/// the value and reports it back so the caller can confirm with a toast.
+fn field_cell(ui: &mut egui::Ui, language: Language, entry: &Field) -> Option<String> {
     const ICON_SIZE: f32 = 17.0;
     const VALUE_SIZE: f32 = 17.0;
     const UNIT_SIZE: f32 = 13.0;
     // Muted gray icons: one family, set apart from the values, no hue.
     let icon_color = ui.visuals().text_color().gamma_multiply(0.55);
-    ui.vertical(|ui| {
+    let cell = ui.vertical(|ui| {
         ui.horizontal(|ui| {
             let (rect, _) = ui.allocate_exact_size(Vec2::splat(ICON_SIZE), Sense::hover());
             paint_field_icon(ui.painter(), rect.center(), entry.icon, icon_color, 1.3);
@@ -384,6 +394,15 @@ fn field_cell(ui: &mut egui::Ui, language: Language, entry: &Field) {
             }
         }
     });
+    let Some(value) = &entry.value else {
+        return None;
+    };
+    let response = cell
+        .response
+        .interact(Sense::click())
+        .on_hover_cursor(egui::CursorIcon::Copy)
+        .on_hover_text(text(language, "overview_copy_hint"));
+    response.clicked().then(|| value.clone())
 }
 
 fn empty_state(ui: &mut egui::Ui, language: Language) {

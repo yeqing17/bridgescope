@@ -27,6 +27,7 @@ rfd = "0.15.4"
 serde.workspace = true
 serde_json.workspace = true
 reqwest.workspace = true
+egui_plot.workspace = true
 
 [target.'cfg(windows)'.build-dependencies]
 # Embeds assets/fadb.ico as the exe file icon (Explorer, taskbar default).

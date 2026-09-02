@@ -578,30 +578,19 @@ impl AdbTransport for ProcessAdbTransport {
         &self,
         serial: &DeviceSerial,
     ) -> Result<PerformanceMetrics, BridgeError> {
-        let meminfo = self.shell(serial, &["cat", "/proc/meminfo"]).await?;
-        let loadavg = self.optional_shell(serial, &["cat", "/proc/loadavg"]).await;
-        let cpuinfo = self.optional_shell(serial, &["dumpsys", "cpuinfo"]).await;
-        let battery = self.optional_shell(serial, &["dumpsys", "battery"]).await;
-        let storage = self.optional_shell(serial, &["df", "-k", "/data"]).await;
-        Ok(PerformanceMetrics {
-            cpu_usage_percent: cpuinfo.as_deref().and_then(parse_cpu_usage_percent),
-            load_average_1m: loadavg.as_deref().and_then(parse_load_average_1m),
-            memory_total_kib: parse_mem_value_kib(&meminfo, "MemTotal"),
-            memory_available_kib: parse_mem_value_kib(&meminfo, "MemAvailable")
-                .or_else(|| parse_mem_value_kib(&meminfo, "MemFree")),
-            storage_total_kib: storage
-                .as_deref()
-                .and_then(parse_storage_kib)
-                .map(|value| value.0),
-            storage_used_kib: storage
-                .as_deref()
-                .and_then(parse_storage_kib)
-                .map(|value| value.1),
-            battery_percent: battery
-                .as_deref()
-                .and_then(|value| parse_named_u64(value, "level"))
-                .and_then(|value| u8::try_from(value).ok()),
-        })
+        // One adb roundtrip instead of five: loadavg, /proc/stat and meminfo
+        // in a single cat, then battery and storage, then — after an
+        // on-device pause — a second /proc/stat whose diff is the CPU usage.
+        // `dumpsys cpuinfo` is gone entirely: it was by far the slowest
+        // command of the previous five-call pipeline.
+        let output = self.shell(
+            serial,
+            &[
+                "cat /proc/loadavg /proc/stat /proc/meminfo; dumpsys battery; df -k /data; sleep 0.4; cat /proc/stat",
+            ],
+        )
+        .await?;
+        Ok(parse_performance_output(&output))
     }
 
     async fn start_shell(
@@ -829,9 +818,15 @@ fn parse_mem_value_kib(output: &str, key: &str) -> Option<u64> {
 }
 
 fn parse_storage_kib(output: &str) -> Option<(u64, u64)> {
-    output.lines().skip(1).find_map(|line| {
+    output.lines().find_map(|line| {
         let fields = line.split_whitespace().collect::<Vec<_>>();
         if fields.len() < 4 {
+            return None;
+        }
+        // `df` is the only source whose first column is a filesystem path,
+        // which keeps the scanner on the combined probe output from matching
+        // unrelated multi-column lines (e.g. /proc/stat).
+        if !fields[0].contains('/') {
             return None;
         }
         Some((fields[1].parse().ok()?, fields[2].parse().ok()?))
@@ -846,15 +841,55 @@ fn parse_load_average_1m(output: &str) -> Option<f32> {
     output.split_whitespace().next()?.parse().ok()
 }
 
-fn parse_cpu_usage_percent(output: &str) -> Option<f32> {
-    output.lines().find_map(|line| {
-        let upper = line.to_ascii_uppercase();
-        if !upper.contains("TOTAL") {
-            return None;
-        }
-        line.split_whitespace()
-            .find_map(|field| field.strip_suffix('%').and_then(|value| value.parse().ok()))
-    })
+/// CPU usage from two `/proc/stat` snapshots inside one combined output:
+/// the first and last aggregate `cpu ` lines delimit the measurement window.
+/// Total jiffies are the sum of every numeric field; busy time excludes the
+/// idle and iowait columns.
+#[allow(clippy::cast_precision_loss)] // f32 precision is fine for a display percentage
+fn parse_cpu_usage_from_stat(output: &str) -> Option<f32> {
+    let read = |line: &str| -> Option<(u64, u64)> {
+        let fields = line
+            .split_whitespace()
+            .skip(1)
+            .map(str::parse::<u64>)
+            .collect::<Result<Vec<_>, _>>()
+            .ok()?;
+        let idle = fields.get(3).copied()?;
+        let iowait = fields.get(4).copied().unwrap_or(0);
+        let total = fields.iter().sum::<u64>();
+        Some((total, total - idle - iowait))
+    };
+    let mut first: Option<(u64, u64)> = None;
+    let mut last: Option<(u64, u64)> = None;
+    for line in output.lines().filter(|line| line.starts_with("cpu ")) {
+        let snapshot = read(line)?;
+        first = first.or(Some(snapshot));
+        last = Some(snapshot);
+    }
+    let (total_a, busy_a) = first?;
+    let (total_b, busy_b) = last?;
+    let d_total = total_b.checked_sub(total_a)?;
+    let d_busy = busy_b.checked_sub(busy_a)?;
+    (d_total > 0).then(|| (d_busy as f32 * 100.0 / d_total as f32).clamp(0.0, 100.0))
+}
+
+/// Parses the combined output of the single-shell performance probe:
+/// `loadavg`, `/proc/stat`, `/proc/meminfo`, `dumpsys battery`, `df -k
+/// /data`, then a second `/proc/stat`. Every parser pattern-matches its own
+/// section, so the concatenation needs no splitting — except storage, whose
+/// matcher requires a filesystem path as the first column.
+fn parse_performance_output(output: &str) -> PerformanceMetrics {
+    PerformanceMetrics {
+        cpu_usage_percent: parse_cpu_usage_from_stat(output),
+        load_average_1m: parse_load_average_1m(output),
+        memory_total_kib: parse_mem_value_kib(output, "MemTotal"),
+        memory_available_kib: parse_mem_value_kib(output, "MemAvailable")
+            .or_else(|| parse_mem_value_kib(output, "MemFree")),
+        storage_total_kib: parse_storage_kib(output).map(|value| value.0),
+        storage_used_kib: parse_storage_kib(output).map(|value| value.1),
+        battery_percent: parse_named_u64(output, "level")
+            .and_then(|value| u8::try_from(value).ok()),
+    }
 }
 
 /// Parses a full `getprop` dump of `[key]: [value]` lines. Values may contain
@@ -1054,9 +1089,37 @@ mod tests {
             Some(1024)
         );
         assert_eq!(parse_load_average_1m("1.25 0.50 0.25 1/20 42"), Some(1.25));
-        assert_eq!(
-            parse_cpu_usage_percent("TOTAL: 18% user + 4% kernel"),
-            Some(18.0)
-        );
+    }
+
+    #[test]
+    fn computes_cpu_usage_from_stat_diff() {
+        // Aggregate lines first and last; the per-core `cpu0` lines between
+        // them are ignored. Window: total 900→1600, busy 200→400 → 28.57%.
+        let output = "cpu  100 0 100 700 0 0 0 0\ncpu0 50 0 50 350 0 0 0 0\n\
+                      cpu  200 0 200 1100 100 0 0 0\ncpu0 100 0 100 550 50 0 0 0\n";
+        let percent = parse_cpu_usage_from_stat(output).expect("cpu percent");
+        assert!((percent - 28.57).abs() < 0.01);
+        // One snapshot only: no diff, no usage.
+        assert_eq!(parse_cpu_usage_from_stat("cpu  1 2 3 4 5 6 7 8\n"), None);
+    }
+
+    #[test]
+    fn parses_combined_performance_probe() {
+        let output = "0.42 0.30 0.25 1/1234 5678\n\
+                      cpu  100 0 100 700 0 0 0 0\n\
+                      MemTotal:       5944320 kB\n\
+                      MemAvailable:   2097152 kB\n\
+                      Current Battery Service state:\n  level: 84\n\
+                      Filesystem     1K-blocks     Used Available Use% Mounted on\n\
+                      /dev/block/dm-12  5944320 2254438   3689882  38% /data\n\
+                      cpu  160 0 160 1100 100 0 0 0\n";
+        let metrics = parse_performance_output(output);
+        assert!((metrics.cpu_usage_percent.unwrap() - 19.35).abs() < 0.01);
+        assert_eq!(metrics.load_average_1m, Some(0.42));
+        assert_eq!(metrics.memory_total_kib, Some(5_944_320));
+        assert_eq!(metrics.memory_available_kib, Some(2_097_152));
+        assert_eq!(metrics.battery_percent, Some(84));
+        assert_eq!(metrics.storage_total_kib, Some(5_944_320));
+        assert_eq!(metrics.storage_used_kib, Some(2_254_438));
     }
 }

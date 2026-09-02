@@ -56,6 +56,21 @@ pub fn palette(dark_mode: bool) -> Palette {
     }
 }
 
+/// Draw a plain label whose text sits on the same line as an adjacent
+/// [`egui::Button`]. egui pushes every widget in a horizontal row down to the
+/// row top (the "expand down" adjustment in `Layout::next_frame`), so the
+/// button's text ends up centered inside its taller frame, `button_padding.y`
+/// below a bare label's text. Giving the label the same height via an
+/// invisible frame centers the two on the same line.
+#[allow(clippy::cast_possible_truncation)] // theme paddings are small whole points
+pub fn button_aligned_label(ui: &mut egui::Ui, text: &str) {
+    egui::Frame::new()
+        .inner_margin(Margin::symmetric(0, ui.spacing().button_padding.y as i8))
+        .show(ui, |ui| {
+            ui.label(text);
+        });
+}
+
 pub fn configure(context: &egui::Context) {
     set_fonts(context);
     // An explicit preference, not `ThemePreference::System`: egui keeps two

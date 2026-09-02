@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, Color32, RichText, Stroke};
 use fadb_domain::{
     AdbEndpoint, AiSettings, BackendCommand, BackendEvent, BridgeError, DeviceOverview,
     DeviceRecord, DeviceSnapshot,
@@ -39,6 +39,10 @@ const COLLAPSED_NAVIGATION_WIDTH: f32 = 40.0;
 const NAVIGATION_COLLAPSED_STORAGE_KEY: &str = "fadb.navigation_collapsed";
 /// Horizontal inner margin of the top-bar frame.
 const TOP_BAR_MARGIN_X: i8 = 12;
+/// Performance panel poll gate in milliseconds. The backend answers as fast
+/// as the device allows (each sample shells out several times), so this is
+/// an upper bound on the rate, not a promise.
+const PERFORMANCE_POLL_MILLIS: u64 = 500;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Panel {
@@ -163,6 +167,9 @@ pub struct FadbApp {
     endpoint_port: String,
     connecting_endpoint: Option<AdbEndpoint>,
     last_error: Option<BridgeError>,
+    /// Transient confirmation shown at the bottom of the content area
+    /// (e.g. after a click-to-copy in the overview).
+    toast: Option<Toast>,
     windows: WindowState,
     /// Dev-only (`FADB_SELECT=1`): pick the first discovered device so
     /// visual checks run without touching the device combo box.
@@ -218,6 +225,7 @@ impl FadbApp {
             endpoint_port: "5555".to_owned(),
             connecting_endpoint: None,
             last_error: None,
+            toast: None,
             windows: WindowState::default(),
             auto_select_requested: std::env::var_os("FADB_SELECT").is_some(),
             auto_select_app: std::env::var_os("FADB_SELECT").is_some(),
@@ -637,7 +645,7 @@ impl FadbApp {
             .show(ui, |ui| {
                 ui.label(text(self.language, "diagnostics"));
                 ui.horizontal(|ui| {
-                    button_aligned_label(
+                    theme::button_aligned_label(
                         ui,
                         self.adb_path
                             .as_deref()
@@ -982,13 +990,20 @@ impl FadbApp {
                 let selected = self.selected_record().cloned();
                 let commands = match self.active_panel {
                     Panel::Overview => {
-                        overview::show(
+                        let copied = overview::show(
                             ui,
                             self.language,
                             selected.as_ref(),
                             self.overview.as_ref(),
                             self.loading_overview,
                         );
+                        if let Some(value) = copied {
+                            ui.ctx().copy_text(value.clone());
+                            self.toast = Some(Toast {
+                                text: format!("{} {value}", text(self.language, "copied")),
+                                born: Instant::now(),
+                            });
+                        }
                         Vec::new()
                     }
                     Panel::Shell => shell::show(
@@ -1029,6 +1044,7 @@ impl FadbApp {
                 for command in commands {
                     self.send(command);
                 }
+                show_toast(ui, &mut self.toast);
             });
     }
 
@@ -1077,10 +1093,11 @@ impl FadbApp {
         if self.active_panel == Panel::Performance {
             context.request_repaint_after(Duration::from_millis(250));
             if let Some(target) = target
+                && !self.performance.paused
                 && !self.performance.loading
-                && self
-                    .last_performance_refresh
-                    .is_none_or(|last| now.duration_since(last) >= Duration::from_secs(1))
+                && self.last_performance_refresh.is_none_or(|last| {
+                    now.duration_since(last) >= Duration::from_millis(PERFORMANCE_POLL_MILLIS)
+                })
             {
                 self.last_performance_refresh = Some(now);
                 self.send(BackendCommand::LoadPerformance(target));
@@ -1352,7 +1369,7 @@ impl FadbApp {
                 // Shown regardless of detection state: the natural next step
                 // after "not detected" is to go get it.
                 ui.horizontal(|ui| {
-                    button_aligned_label(ui, text(self.language, "adb_download"));
+                    theme::button_aligned_label(ui, text(self.language, "adb_download"));
                     if ui
                         .button(text(self.language, "adb_download_link"))
                         .clicked()
@@ -1545,21 +1562,48 @@ fn caption_button(
     .on_hover_text(tooltip)
 }
 
-/// Draw a plain label whose text sits on the same line as an adjacent
-/// [`egui::Button`]. egui pushes every widget in a horizontal row down to the
-/// row top (the "expand down" adjustment in `Layout::next_frame`), so the
-/// button's text ends up centered inside its taller frame, `button_padding.y`
-/// below a bare label's text. Giving the label the same height via an
-/// invisible frame centers the two on the same line.
-#[allow(clippy::cast_possible_truncation)] // theme paddings are small whole points
-fn button_aligned_label(ui: &mut egui::Ui, text: &str) {
-    egui::Frame::new()
-        .inner_margin(egui::Margin::symmetric(
-            0,
-            ui.spacing().button_padding.y as i8,
-        ))
-        .show(ui, |ui| {
-            ui.label(text);
+/// A transient confirmation chip, e.g. "Copied 192.168.1.3".
+struct Toast {
+    text: String,
+    born: Instant,
+}
+
+/// Full opacity for a second, then a half-second fade, then gone.
+const TOAST_LIFETIME: Duration = Duration::from_millis(1500);
+
+/// Draw the active toast (if any) at the bottom-center of the content area
+/// and expire it. An `egui::Area` on the foreground layer so panel content
+/// never paints over it.
+fn show_toast(ui: &mut egui::Ui, toast: &mut Option<Toast>) {
+    let Some(t) = toast.as_ref() else { return };
+    let age = t.born.elapsed();
+    if age >= TOAST_LIFETIME {
+        *toast = None;
+        return;
+    }
+    // Remaining time scaled to the half-second fade window: 1.0 while more
+    // than half a second is left, then linearly down to 0.
+    let alpha = ((TOAST_LIFETIME - age).as_secs_f32() / 0.5).clamp(0.0, 1.0);
+    let palette = theme::palette(ui.visuals().dark_mode);
+    egui::Area::new(egui::Id::new("fadb-toast"))
+        .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -28.0])
+        .order(egui::Order::Foreground)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::new()
+                .fill(palette.ai_bubble.gamma_multiply(alpha))
+                .stroke(Stroke::new(
+                    1.0,
+                    palette.bubble_stroke.gamma_multiply(alpha),
+                ))
+                .corner_radius(8.0)
+                .inner_margin(egui::Margin::symmetric(14, 8))
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new(&t.text)
+                            .strong()
+                            .color(ui.visuals().text_color().gamma_multiply(alpha)),
+                    );
+                });
         });
 }
 
