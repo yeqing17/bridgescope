@@ -173,6 +173,14 @@ fn build_visuals(dark_mode: bool) -> egui::Visuals {
 /// everything keeps every baseline on the same grid.
 pub fn set_fonts(context: &egui::Context) {
     let mut fonts = FontDefinitions::default();
+    // The wordmark draws from a Latin-only family: the CJK font's tall,
+    // descent-heavy line box makes glyph centering against the logo look
+    // bottom-heavy no matter how the label is boxed.
+    let brand_family = FontFamily::Name("fadb-brand".into());
+    fonts.families.insert(
+        brand_family.clone(),
+        vec!["Ubuntu-Light".to_owned(), "NotoEmoji-Regular".to_owned()],
+    );
     for candidate in font_candidates() {
         if let Ok(bytes) = fs::read(candidate) {
             fonts

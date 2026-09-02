@@ -26,6 +26,9 @@ const MAX_RECENT_ENDPOINTS: usize = 8;
 const SLOGAN: &str = "a featherweight ADB toolbox, in Rust";
 /// How long the pointer must rest on the logo before the slogan shows.
 const SLOGAN_HOVER_SECONDS: f32 = 1.5;
+/// Downward offset of the brand group so its bottom edge lines up with the
+/// device selector's box on the same bar.
+const BRAND_DROP_PT: f32 = 2.0;
 /// Width of the left navigation panel. The top bar aligns the device
 /// selector's left edge to this boundary, so the two must share the
 /// constant.
@@ -720,37 +723,47 @@ impl FadbApp {
                             },
                         );
 
-                        egui::ComboBox::from_id_salt("device-selector")
-                            .selected_text(selected_text)
-                            .width(280.0)
-                            .show_ui(ui, |ui| {
-                                if ui
-                                    .selectable_label(
-                                        self.snapshot.selected.is_none(),
-                                        text(self.language, "select_device"),
-                                    )
-                                    .clicked()
-                                {
-                                    self.send(BackendCommand::SelectDevice(None));
-                                }
-                                let devices = self.snapshot.devices.clone();
-                                for record in devices {
-                                    let serial = record.descriptor.serial.clone();
-                                    let is_selected =
-                                        self.snapshot.selected.as_ref() == Some(&serial);
-                                    let label = format!(
-                                        "{} · {:?} · {}",
-                                        record.descriptor.display_name(),
-                                        record.descriptor.state,
-                                        serial
-                                    );
-                                    if ui.selectable_label(is_selected, label).clicked() {
-                                        self.send(BackendCommand::SelectDevice(Some(serial)));
+                        // Reserve the combo's layout space first, then draw
+                        // it inside a scope lifted to the same baseline as
+                        // the plain buttons: egui places allocate children at
+                        // the cursor while buttons center in the row height,
+                        // a fixed 1.7pt mismatch at this font size.
+                        let (combo_space, _) =
+                            ui.allocate_exact_size(egui::vec2(280.0, 25.0), egui::Sense::hover());
+                        let combo_rect = combo_space.translate(egui::vec2(0.0, -1.7));
+                        ui.scope_builder(egui::UiBuilder::new().max_rect(combo_rect), |ui| {
+                            egui::ComboBox::from_id_salt("device-selector")
+                                .selected_text(selected_text)
+                                .width(280.0)
+                                .show_ui(ui, |ui| {
+                                    if ui
+                                        .selectable_label(
+                                            self.snapshot.selected.is_none(),
+                                            text(self.language, "select_device"),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.send(BackendCommand::SelectDevice(None));
                                     }
-                                }
-                            });
-
-                        if ui.button(text(self.language, "refresh")).clicked() {
+                                    let devices = self.snapshot.devices.clone();
+                                    for record in devices {
+                                        let serial = record.descriptor.serial.clone();
+                                        let is_selected =
+                                            self.snapshot.selected.as_ref() == Some(&serial);
+                                        let label = format!(
+                                            "{} · {:?} · {}",
+                                            record.descriptor.display_name(),
+                                            record.descriptor.state,
+                                            serial
+                                        );
+                                        if ui.selectable_label(is_selected, label).clicked() {
+                                            self.send(BackendCommand::SelectDevice(Some(serial)));
+                                        }
+                                    }
+                                });
+                        });
+                        let refresh_response = ui.button(text(self.language, "refresh"));
+                        if refresh_response.clicked() {
                             self.send(BackendCommand::RefreshDevices);
                             if let Some(serial) = self.snapshot.selected.clone() {
                                 self.send(BackendCommand::LoadOverview(serial));
@@ -783,6 +796,34 @@ impl FadbApp {
     /// Logo plus app name; hovering the logo for a while reveals the project
     /// slogan as an easter egg.
     fn brand_with_slogan(&mut self, ui: &mut egui::Ui) {
+        // Latin-only brand family registered in `theme::set_fonts`; see the
+        // note there for why the wordmark avoids the CJK primary font.
+        let font_id = egui::FontId::new(20.0, egui::FontFamily::Name("fadb-brand".into()));
+        let text_width = ui.fonts_mut(|fonts| {
+            fonts
+                .layout_no_wrap("Fadb".to_owned(), font_id.clone(), Color32::WHITE)
+                .size()
+                .x
+        });
+        // Reserve the whole brand footprint, then draw it inside a scope
+        // dropped by `BRAND_DROP_PT` so its bottom edge lines up with the
+        // device selector's box beside it.
+        let spacing = ui.spacing().item_spacing.x;
+        let (brand_space, _) = ui.allocate_exact_size(
+            egui::vec2(22.0 + spacing + text_width, 25.0),
+            egui::Sense::hover(),
+        );
+        ui.scope_builder(
+            egui::UiBuilder::new().max_rect(brand_space.translate(egui::vec2(0.0, BRAND_DROP_PT))),
+            |ui| {
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    self.brand_contents(ui);
+                });
+            },
+        );
+    }
+
+    fn brand_contents(&mut self, ui: &mut egui::Ui) {
         let logo_response = logo(ui, 22.0);
         // Pure geometry: widget hover can be swallowed by the title-bar drag
         // zone registered over this area, a rect test cannot. Wall-clock
@@ -817,8 +858,32 @@ impl FadbApp {
             self.logo_hover_started = None;
         }
         // Not selectable: selectable text would swallow the drag and turn
-        // window-moves into text selections.
-        ui.add(egui::Label::new(RichText::new("Fadb").size(20.0).strong()).selectable(false));
+        // window-moves into text selections. The wordmark draws from the
+        // Latin-only brand family registered in `theme::set_fonts` and is
+        // centered inside the logo's exact height, so the glyphs line up with
+        // the tile optically.
+        let font_id = egui::FontId::new(20.0, egui::FontFamily::Name("fadb-brand".into()));
+        let text_width = ui.fonts_mut(|fonts| {
+            fonts
+                .layout_no_wrap("Fadb".to_owned(), font_id.clone(), Color32::WHITE)
+                .size()
+                .x
+        });
+        // 25pt, not the logo's 22: egui centers horizontal-row items against
+        // the row height *at the moment they are added*, so the first item
+        // must already establish the row's final height or later, taller
+        // items drift below it.
+        ui.allocate_ui(egui::vec2(text_width, 25.0), |ui| {
+            ui.with_layout(
+                egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+                |ui| {
+                    ui.add(
+                        egui::Label::new(RichText::new("Fadb").strong().font(font_id))
+                            .selectable(false),
+                    );
+                },
+            );
+        });
     }
 
     fn side_bar(&mut self, context: &egui::Context) {
