@@ -6,7 +6,7 @@
 
 > a featherweight ADB toolbox, in Rust
 
-fadb 是一个独立实现的纯 Rust 桌面工具集,通过 ADB 检查与管理 Android 设备。当前版本 **0.8.7**,完整变更见 [`CHANGELOG.md`](CHANGELOG.md),功能边界与路线图见 [`docs/feature-matrix.md`](docs/feature-matrix.md)。
+fadb 是一个独立实现的纯 Rust 桌面工具集,通过 ADB 检查与管理 Android 设备。当前版本 **0.8.8**,完整变更见 [`CHANGELOG.md`](CHANGELOG.md),功能边界与路线图见 [`docs/feature-matrix.md`](docs/feature-matrix.md)。
 
 ## 功能
 

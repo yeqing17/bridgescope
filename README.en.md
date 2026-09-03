@@ -6,7 +6,7 @@
 
 > a featherweight ADB toolbox, in Rust
 
-fadb is an independently implemented, pure-Rust desktop toolkit for inspecting and managing Android devices through ADB. Current release: **0.8.7**; see [`CHANGELOG.md`](CHANGELOG.md) for the full history and [`docs/feature-matrix.md`](docs/en/feature-matrix.md) for scope and roadmap.
+fadb is an independently implemented, pure-Rust desktop toolkit for inspecting and managing Android devices through ADB. Current release: **0.8.8**; see [`CHANGELOG.md`](CHANGELOG.md) for the full history and [`docs/feature-matrix.md`](docs/en/feature-matrix.md) for scope and roadmap.
 
 ## Features
 
