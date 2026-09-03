@@ -8,7 +8,7 @@ use fadb_domain::{
 };
 
 use crate::{
-    i18n::{Language, adb_download_url, error_title, text},
+    i18n::{Language, adb_download_url, error_hint, error_title, text},
     panels::{
         applications, assistant, files, layout, logcat, mirror, overview, performance, processes,
         screenshot, shell, webview,
@@ -961,6 +961,96 @@ impl FadbApp {
         });
     }
 
+    /// APK drag & drop: while an APK hovers the window a highlight is drawn
+    /// over everything; dropping it jumps to the applications panel and
+    /// installs it on the selected device. Anywhere in the window works —
+    /// the drop target is the app, not one panel.
+    fn handle_apk_drop(&mut self, context: &egui::Context) {
+        let (hovered, dropped) = context.input(|input| {
+            (
+                input.raw.hovered_files.clone(),
+                input.raw.dropped_files.clone(),
+            )
+        });
+        if let Some(hovered_apk) = hovered
+            .iter()
+            .find(|file| is_apk_path(file.path.as_deref()))
+        {
+            // A stationary hover stops the input events that drive repaints,
+            // but the overlay needs a repaint to stay (and then to vanish).
+            context.request_repaint_after(Duration::from_millis(120));
+            let name = hovered_apk
+                .path
+                .as_deref()
+                .and_then(|path| path.file_name())
+                .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+            self.draw_drop_overlay(context, &name);
+        }
+        let Some(apk) = dropped.iter().find_map(|file| {
+            is_apk_path(file.path.as_deref())
+                .then(|| file.path.clone())
+                .flatten()
+        }) else {
+            return;
+        };
+        if self.applications.install_in_progress() {
+            return; // one install at a time; the panel already shows it
+        }
+        let Some(record) = self.selected_record() else {
+            self.last_error = Some(BridgeError::invalid_input("applications.drop_needs_device"));
+            return;
+        };
+        let target = record.target();
+        self.active_panel = Panel::Applications;
+        let command = self.applications.begin_install(target, apk);
+        self.send(command);
+    }
+
+    /// Full-window highlight shown while an APK hovers the window, painted
+    /// straight onto the foreground layer so it sits above every panel.
+    fn draw_drop_overlay(&self, context: &egui::Context, file_name: &str) {
+        let bounds = context.content_rect();
+        let painter = egui::Painter::new(
+            context.clone(),
+            egui::LayerId::new(egui::Order::Foreground, egui::Id::new("apk-drop-overlay")),
+            bounds,
+        );
+        let rect = bounds.shrink(20.0);
+        let palette = theme::palette(self.dark_mode);
+        painter.rect_filled(
+            rect,
+            16.0,
+            Color32::from_rgba_unmultiplied(
+                theme::ACCENT.r(),
+                theme::ACCENT.g(),
+                theme::ACCENT.b(),
+                36,
+            ),
+        );
+        painter.rect_stroke(
+            rect,
+            16.0,
+            Stroke::new(2.0, theme::ACCENT),
+            egui::StrokeKind::Inside,
+        );
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            text(self.language, "applications_drop_install"),
+            egui::FontId::proportional(24.0),
+            palette.on_accent,
+        );
+        if !file_name.is_empty() {
+            painter.text(
+                rect.center() + egui::vec2(0.0, 30.0),
+                egui::Align2::CENTER_CENTER,
+                file_name,
+                egui::FontId::proportional(13.0),
+                context.style().visuals.text_color(),
+            );
+        }
+    }
+
     fn central_panel(&mut self, context: &egui::Context) {
         self.refresh_live_panels(context);
         // The content area is the darkest layer so the surrounding panels and
@@ -983,6 +1073,9 @@ impl FadbApp {
                         .show(ui, |ui| {
                             ui.label(RichText::new(error_title(self.language, error)).strong());
                             ui.label(&error.detail);
+                            if let Some(hint) = error_hint(self.language, error) {
+                                ui.small(hint);
+                            }
                         });
                     ui.add_space(10.0);
                 }
@@ -1400,6 +1493,7 @@ impl FadbApp {
 impl eframe::App for FadbApp {
     fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
         self.process_events();
+        self.handle_apk_drop(context);
         if let Some(command) = self
             .files
             .reconcile_target(self.selected_record().map(DeviceRecord::target))
@@ -1666,6 +1760,13 @@ fn logo_texture(ctx: &egui::Context) -> egui::TextureHandle {
 /// Invisible thickness of the window's resize seams, in points.
 const RESIZE_SEAM_THICKNESS: f32 = 8.0;
 
+/// Whether a hovered/dropped file is an APK by extension (case-insensitive —
+/// Windows users often carry `.APK`).
+fn is_apk_path(path: Option<&std::path::Path>) -> bool {
+    path.and_then(std::path::Path::extension)
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("apk"))
+}
+
 /// Which resize direction a pointer position corresponds to, when it sits in
 /// an edge or corner seam of the given screen rect.
 fn resize_direction(pos: egui::Pos2, screen: egui::Rect) -> Option<egui::ResizeDirection> {
@@ -1712,6 +1813,15 @@ mod tests {
         assert_eq!(Panel::ALL[0], Panel::Overview);
         assert_eq!(Panel::ALL[9], Panel::WebView);
         assert_eq!(Panel::ALL[10], Panel::Mirror);
+    }
+
+    #[test]
+    fn apk_detection_is_extension_based_and_case_insensitive() {
+        assert!(is_apk_path(Some(std::path::Path::new("C:/a/b.apk"))));
+        assert!(is_apk_path(Some(std::path::Path::new("app.APK"))));
+        assert!(!is_apk_path(Some(std::path::Path::new("app.zip"))));
+        assert!(!is_apk_path(Some(std::path::Path::new("apk"))));
+        assert!(!is_apk_path(None));
     }
 
     #[test]

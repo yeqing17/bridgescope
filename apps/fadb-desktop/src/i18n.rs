@@ -322,6 +322,9 @@ pub fn text(language: Language, key: &str) -> &'static str {
         (Language::Chinese, "applications_install") => "安装 APK…",
         (Language::Chinese, "applications_install_running") => "正在安装 APK…",
         (Language::Chinese, "applications_install_ok") => "APK 安装成功",
+        (Language::Chinese, "applications_drop_install") => "释放以安装 APK",
+        (Language::Chinese, "applications.install_no_reason") => "APK 安装失败",
+        (Language::Chinese, "applications.drop_needs_device") => "请先选择设备，再安装 APK",
         (Language::Chinese, "wireless") => "无线调试",
         (Language::Chinese, "wireless_hint") => "支持配对、切换无线模式与发现局域网调试服务。",
         (Language::Chinese, "wireless_pair") => "配对地址",
@@ -721,6 +724,9 @@ forwards are cleaned up when the service list refreshes."
         (_, "applications_install") => "Install APK…",
         (_, "applications_install_running") => "Installing APK…",
         (_, "applications_install_ok") => "APK installed",
+        (_, "applications_drop_install") => "Drop to install the APK",
+        (_, "applications.install_no_reason") => "APK install failed",
+        (_, "applications.drop_needs_device") => "Select a device before installing an APK",
         (_, "wireless") => "Wireless debugging",
         (_, "wireless_hint") => "Pair, switch to wireless mode, and discover LAN debug services.",
         (_, "wireless_pair") => "Pair address",
@@ -857,6 +863,26 @@ pub fn error_text(language: Language, error: &BridgeError) -> String {
         message
     } else {
         format!("{message}: {}", error.detail)
+    }
+}
+
+/// Extra localized guidance for domain errors whose raw detail alone is not
+/// actionable; `None` for keys without guidance.
+#[must_use]
+pub fn error_hint(language: Language, error: &BridgeError) -> Option<&'static str> {
+    match error.message_key.as_str() {
+        "applications.install_no_reason" => Some(match language {
+            Language::Chinese => {
+                "adb 未返回失败原因。常见原因：设备屏幕上弹出的安装确认被拒绝或超时（小米/MIUI \
+                 电视常见，请在设备上允许安装），或安装过程中网络连接中断；可重试一次。"
+            }
+            Language::English => {
+                "adb reported no failure reason. Common causes: an on-device install \
+                 confirmation was denied or timed out (common on Xiaomi/MIUI TVs — allow the \
+                 install on the device screen), or the connection dropped mid-install. Try again."
+            }
+        }),
+        _ => None,
     }
 }
 
@@ -1259,6 +1285,8 @@ mod tests {
         "webview.forward_failed",
         "webview.pages_unreachable",
         "applications.install_failed",
+        "applications.install_no_reason",
+        "applications.drop_needs_device",
         "device.target_stale",
         "wireless.pair_invalid",
         "mirror.codec_mismatch",

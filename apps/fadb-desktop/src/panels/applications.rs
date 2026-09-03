@@ -174,6 +174,29 @@ impl ApplicationsPanelState {
         commands
     }
 
+    /// Whether an APK install is in flight (drives the header spinner and
+    /// the drop / button re-entry guards).
+    pub fn install_in_progress(&self) -> bool {
+        self.install.is_some()
+    }
+
+    /// Starts an APK install from the file picker or a drag & drop; returns
+    /// the command to send. One install at a time.
+    pub fn begin_install(
+        &mut self,
+        target: DeviceTarget,
+        apk_path: std::path::PathBuf,
+    ) -> BackendCommand {
+        let request_id = OperationId::new();
+        self.install = Some(request_id);
+        self.install_notice = false;
+        BackendCommand::InstallApk {
+            request_id,
+            target,
+            apk_path,
+        }
+    }
+
     /// The record of the selected package, if it is still listed.
     fn selected_record(&self) -> Option<&ApplicationRecord> {
         let selected = self.selected.as_ref()?;
@@ -257,14 +280,7 @@ pub fn show(
                     .pick_file()
                 && let Some(target) = state.target.clone()
             {
-                let request_id = OperationId::new();
-                state.install = Some(request_id);
-                state.install_notice = false;
-                commands.push(BackendCommand::InstallApk {
-                    request_id,
-                    target,
-                    apk_path: path,
-                });
+                commands.push(state.begin_install(target, path));
             }
         });
     });
@@ -1136,6 +1152,27 @@ mod tests {
         });
 
         assert!(state.install.is_none());
+        assert!(!state.install_notice);
+    }
+
+    #[test]
+    fn beginning_an_install_tracks_the_request() {
+        let mut state = ApplicationsPanelState::default();
+        let device = device_target();
+        state.reset_for(Some(device.clone()));
+        state.install_notice = true;
+        let path = std::path::PathBuf::from("C:/apps/demo.apk");
+
+        let command = state.begin_install(device, path.clone());
+
+        assert!(matches!(
+            &command,
+            BackendCommand::InstallApk { apk_path, .. } if *apk_path == path
+        ));
+        let BackendCommand::InstallApk { request_id, .. } = command else {
+            unreachable!("matched above");
+        };
+        assert_eq!(state.install, Some(request_id));
         assert!(!state.install_notice);
     }
 

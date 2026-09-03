@@ -193,25 +193,45 @@ pub async fn install_apk(
 
 /// Judges one `adb install` run by its well-known textual result: adb prints
 /// `Success` or `Failure [reason]` regardless of the process exit status.
+///
+/// Some devices (MIUI TVs in particular) abort the install session without a
+/// reason: adb's stderr keeps the bare `failed to install <path>:` prefix with
+/// nothing after the colon. Those get a dedicated message key so the UI can
+/// attach actionable guidance instead of a dangling colon.
 fn install_result(output: &crate::process::ProcessOutput) -> Result<(), BridgeError> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     if stdout.lines().any(|line| line.trim() == "Success") {
         return Ok(());
     }
-    let detail = stdout
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = stderr.trim();
+    let reason = stdout
         .lines()
-        .find_map(|line| line.trim().strip_prefix("Failure").map(str::to_owned))
+        .find_map(|line| line.trim().strip_prefix("Failure"))
+        .map(str::trim)
+        // `Failure []` — brackets with nothing inside are reasonless too.
+        .filter(|reason| !reason.is_empty() && *reason != "[]")
+        .map(str::to_owned)
         .or_else(|| {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let trimmed = stderr.trim();
-            (!trimmed.is_empty()).then(|| trimmed.to_owned())
-        })
-        .unwrap_or_else(|| format!("adb exited with {:?}", output.exit_code));
-    Err(BridgeError::new(
-        ErrorCode::AdbFailed,
-        "applications.install_failed",
-        detail,
-    ))
+            // `... install <path>:` — adb gave no device-side reason.
+            if stderr.ends_with(':') {
+                None
+            } else {
+                (!stderr.is_empty()).then(|| stderr.to_owned())
+            }
+        });
+    let (message_key, detail) = match reason {
+        Some(reason) => ("applications.install_failed", reason),
+        None => (
+            "applications.install_no_reason",
+            if stderr.is_empty() {
+                format!("adb exited with {:?}", output.exit_code)
+            } else {
+                stderr.to_owned()
+            },
+        ),
+    };
+    Err(BridgeError::new(ErrorCode::AdbFailed, message_key, detail))
 }
 
 #[cfg(test)]
@@ -338,6 +358,26 @@ mod tests {
         let noisy = install_output("", "adb: no devices/emulators found", Some(1));
         let error = install_result(&noisy).expect_err("must fail");
         assert!(error.detail.contains("no devices"));
+    }
+
+    #[test]
+    fn install_without_a_reason_gets_the_dedicated_key() {
+        // MIUI-style abort: adb keeps the stderr prefix but no reason follows
+        // the colon (the exact output from the field report).
+        let output = install_output(
+            "Performing Streamed Install\n",
+            "adb.exe: failed to install D:\\Users\\x\\app.apk:",
+            Some(1),
+        );
+        let error = install_result(&output).expect_err("must fail");
+        assert_eq!(error.message_key, "applications.install_no_reason");
+        assert!(error.detail.contains("failed to install"));
+
+        // A bare `Failure` line with empty brackets is equally reasonless.
+        let empty_brackets = install_output("Failure []\n", "", Some(1));
+        let error = install_result(&empty_brackets).expect_err("must fail");
+        assert_eq!(error.message_key, "applications.install_no_reason");
+        assert!(error.detail.contains("exited with"));
     }
 
     /// Real-device acceptance: pulls an already-installed APK and reinstalls
